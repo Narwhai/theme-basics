@@ -132,6 +132,57 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     new Notice("All overrides reset.");
   }
 
+  exportSettingsJson(): void {
+    const json = JSON.stringify(this.settings, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "theme-basics-settings.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  importSettingsJson(onSuccess: () => void): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed: unknown = JSON.parse(text);
+        this.settings = this.normalizeSettings(parsed);
+        await this.saveSettings();
+        new Notice("Settings imported successfully.");
+        onSuccess();
+      } catch {
+        new Notice("Failed to import settings: the file is not valid JSON.");
+      }
+    };
+    input.click();
+  }
+
+  async exportCssSnippet(): Promise<void> {
+    const css = this.styleManager.generateSnippetCss();
+    const snippetPath = ".obsidian/snippets/theme-basics.css";
+    try {
+      await this.app.vault.adapter.mkdir(".obsidian/snippets");
+    } catch {
+      // Folder likely already exists — ignore
+    }
+    try {
+      await this.app.vault.adapter.write(snippetPath, css);
+      new Notice(
+        "Snippet saved to .obsidian/snippets/theme-basics.css — enable it in Appearance → CSS snippets."
+      );
+    } catch (error) {
+      new Notice("Failed to save CSS snippet. See console for details.");
+      console.error("[Theme Basics] exportCssSnippet error:", error);
+    }
+  }
+
   private registerCommands(): void {
     this.addCommand({
       id: "reset-current-profile-overrides",
@@ -148,6 +199,30 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       name: "Reset all style overrides",
       callback: async () => {
         await this.resetAllSettings();
+      },
+    });
+
+    this.addCommand({
+      id: "export-settings-json",
+      name: "Export settings as JSON",
+      callback: () => {
+        this.exportSettingsJson();
+      },
+    });
+
+    this.addCommand({
+      id: "import-settings-json",
+      name: "Import settings from JSON",
+      callback: () => {
+        this.importSettingsJson(() => {});
+      },
+    });
+
+    this.addCommand({
+      id: "export-css-snippet",
+      name: "Export current styles as CSS snippet",
+      callback: async () => {
+        await this.exportCssSnippet();
       },
     });
   }

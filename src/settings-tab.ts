@@ -224,6 +224,54 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     for (const option of ADVANCED_TAG_OPTIONS) {
       this.addColorSetting(advancedSection, editedMode, option);
     }
+
+    // ── Import / Export ──────────────────────────────────────────────────
+    const ioSection = this.createSection(
+      containerEl,
+      "Import / Export",
+      "Share your settings or generate a standalone CSS snippet."
+    );
+
+    new Setting(ioSection)
+      .setName("Export settings")
+      .setDesc("Download your current settings as a JSON file that can be imported later or shared with others.")
+      .addButton((button) =>
+        button
+          .setButtonText("Export JSON")
+          .setIcon("lucide-download")
+          .onClick(() => {
+            this.plugin.exportSettingsJson();
+          })
+      );
+
+    new Setting(ioSection)
+      .setName("Import settings")
+      .setDesc("Load settings from a previously exported JSON file. This will overwrite your current settings.")
+      .addButton((button) =>
+        button
+          .setButtonText("Import JSON")
+          .setIcon("lucide-upload")
+          .onClick(() => {
+            this.plugin.importSettingsJson(() => {
+              this.refreshDisplayPreserveScroll();
+            });
+          })
+      );
+
+    new Setting(ioSection)
+      .setName("Export as CSS snippet")
+      .setDesc(
+        "Save your current style overrides to .obsidian/snippets/theme-basics.css. " +
+        "You can then enable it in Appearance → CSS snippets and use it without this plugin."
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Export snippet")
+          .setIcon("lucide-file-code")
+          .onClick(async () => {
+            await this.plugin.exportCssSnippet();
+          })
+      );
   }
 
   private createSection(containerEl: HTMLElement, title: string, description: string): HTMLElement {
