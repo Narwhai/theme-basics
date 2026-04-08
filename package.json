@@ -1,7 +1,7 @@
 {
-  "name": "default-theme-style-tuner",
+  "name": "theme-basics",
   "version": "0.2.0",
-  "description": "Override default-theme colors and typography for Reading mode and Live Preview.",
+  "description": "Customize the appearance of Obsidian without plugins. Modify colors, text sizing/spacing, and more",
   "main": "main.js",
   "type": "module",
   "scripts": {

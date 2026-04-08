@@ -9,8 +9,8 @@ import type {
   StringProfileKey,
 } from "./types";
 
-export const BODY_CLASS = "default-theme-style-tuner-active";
-export const STYLE_ELEMENT_ID = "default-theme-style-tuner-inline-styles";
+export const BODY_CLASS = "theme-basics-active";
+export const STYLE_ELEMENT_ID = "theme-basics-inline-styles";
 
 export const PROFILE_LABELS: Record<ProfileMode, string> = {
   light: "Light",

@@ -64,7 +64,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     const otherMode = editedMode === "light" ? "dark" : "light";
 
     containerEl.empty();
-    containerEl.addClass("default-theme-style-tuner-settings");
+    containerEl.addClass("theme-basics-settings");
 
     new Setting(containerEl)
       .setName("Profile to edit")
@@ -72,7 +72,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       .addButton((button) => {
         button
           .setButtonText("Light")
-          .setClass("default-theme-style-tuner-profile-button")
+          .setClass("theme-basics-profile-button")
           .onClick(async () => {
             await this.plugin.setEditedProfileMode("light");
             this.refreshDisplayPreserveScroll();
@@ -86,7 +86,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       .addButton((button) => {
         button
           .setButtonText("Dark")
-          .setClass("default-theme-style-tuner-profile-button")
+          .setClass("theme-basics-profile-button")
           .onClick(async () => {
             await this.plugin.setEditedProfileMode("dark");
             this.refreshDisplayPreserveScroll();
