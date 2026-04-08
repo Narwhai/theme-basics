@@ -1,0 +1,122 @@
+.default-theme-style-tuner-settings .default-theme-style-tuner-intro {
+  margin: 0 0 1rem;
+  max-width: 62ch;
+}
+
+.default-theme-style-tuner-settings .setting-group {
+  margin-top: 1rem;
+}
+
+.default-theme-style-tuner-settings .default-theme-style-tuner-profile-button {
+  min-width: 5rem;
+}
+
+body.default-theme-style-tuner-active .markdown-rendered,
+body.default-theme-style-tuner-active .markdown-source-view.mod-cm6,
+body.default-theme-style-tuner-active .markdown-source-view.mod-cm6 .cm-scroller,
+body.default-theme-style-tuner-active .markdown-source-view.mod-cm6 .cm-content {
+  font-size: var(--font-text-size);
+  line-height: var(--line-height-normal);
+}
+
+body.default-theme-style-tuner-active .markdown-source-view.mod-cm6 .cm-line {
+  line-height: var(--line-height-normal);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered strong,
+body.default-theme-style-tuner-active .cm-strong {
+  color: var(--bold-color);
+  font-weight: var(--bold-weight);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered em,
+body.default-theme-style-tuner-active .cm-em {
+  color: var(--italic-color);
+  font-weight: var(--italic-weight);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered mark,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-formatting-highlight,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-highlight {
+  background-color: var(--text-highlight-bg);
+  color: var(--text-normal);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered .internal-link,
+body.default-theme-style-tuner-active .metadata-container .internal-link,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-hmd-internal-link {
+  color: var(--link-color);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered .internal-link:hover,
+body.default-theme-style-tuner-active .metadata-container .internal-link:hover,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-hmd-internal-link:hover {
+  color: var(--link-color-hover);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered .internal-link.is-unresolved,
+body.default-theme-style-tuner-active .metadata-container .internal-link.is-unresolved {
+  color: var(--link-unresolved-color);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered .external-link,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-link,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-formatting-link.cm-url,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-url {
+  color: var(--link-external-color);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered .external-link:hover,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-link:hover,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-formatting-link.cm-url:hover,
+body.default-theme-style-tuner-active .cm-s-obsidian span.cm-url:hover {
+  color: var(--link-external-color-hover);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h1,
+body.default-theme-style-tuner-active .HyperMD-header-1,
+body.default-theme-style-tuner-active .inline-title[data-level='1'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-1 {
+  color: var(--h1-color);
+  font-size: var(--h1-size);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h2,
+body.default-theme-style-tuner-active .HyperMD-header-2,
+body.default-theme-style-tuner-active .inline-title[data-level='2'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-2 {
+  color: var(--h2-color);
+  font-size: var(--h2-size);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h3,
+body.default-theme-style-tuner-active .HyperMD-header-3,
+body.default-theme-style-tuner-active .inline-title[data-level='3'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-3 {
+  color: var(--h3-color);
+  font-size: var(--h3-size);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h4,
+body.default-theme-style-tuner-active .HyperMD-header-4,
+body.default-theme-style-tuner-active .inline-title[data-level='4'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-4 {
+  color: var(--h4-color);
+  font-size: var(--h4-size);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h5,
+body.default-theme-style-tuner-active .HyperMD-header-5,
+body.default-theme-style-tuner-active .inline-title[data-level='5'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-5 {
+  color: var(--h5-color);
+  font-size: var(--h5-size);
+}
+
+body.default-theme-style-tuner-active .markdown-rendered h6,
+body.default-theme-style-tuner-active .HyperMD-header-6,
+body.default-theme-style-tuner-active .inline-title[data-level='6'],
+body.default-theme-style-tuner-active .HyperMD-list-line .cm-header-6 {
+  color: var(--h6-color);
+  font-size: var(--h6-size);
+}

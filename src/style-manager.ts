@@ -1,0 +1,196 @@
+import { BODY_CLASS, CSS_VARIABLE_NAMES, CSS_VARIABLES } from "./constants";
+import { clamp, formatNumber, rgbToHsl, sanitizeCssValue } from "./utils";
+
+import type DefaultThemeStyleTunerPlugin from "./main";
+import type { ProfileMode, RgbColor, StringProfileKey } from "./types";
+
+export class StyleManager {
+  private themeDefaults: Record<string, string> = {};
+
+  constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) {}
+
+  cleanup(): void {
+    document.body.classList.remove(BODY_CLASS);
+    this.clearCssVariables();
+  }
+
+  refreshThemeDefaults(): void {
+    const hadPluginClass = document.body.classList.contains(BODY_CLASS);
+    if (hadPluginClass) {
+      document.body.classList.remove(BODY_CLASS);
+    }
+
+    const computedStyle = getComputedStyle(document.body);
+    this.themeDefaults = Object.fromEntries(
+      CSS_VARIABLE_NAMES.map((variableName) => [
+        variableName,
+        computedStyle.getPropertyValue(variableName).trim(),
+      ])
+    );
+
+    if (hadPluginClass) {
+      document.body.classList.add(BODY_CLASS);
+    }
+  }
+
+  getThemeDefaultVariableValue(variableName: string): string {
+    return this.themeDefaults[variableName] ?? "";
+  }
+
+  getDefaultNumericValue(
+    mode: ProfileMode,
+    key: StringProfileKey,
+    variableName: string,
+    fallbackNumber: number
+  ): number {
+    const explicitValue = this.plugin.getProfile(mode)[key];
+    const parsedValue = Number.parseFloat(
+      explicitValue || this.getThemeDefaultVariableValue(variableName)
+    );
+
+    return Number.isFinite(parsedValue) ? parsedValue : fallbackNumber;
+  }
+
+  getDefaultColorValue(mode: ProfileMode, key: StringProfileKey, variableName: string): string {
+    return this.tryToPickerHex(
+      this.plugin.getProfile(mode)[key] || this.getThemeDefaultVariableValue(variableName)
+    ) ?? "#000000";
+  }
+
+  ensureWithinRange(value: number, min: number, max: number, fallback: number): number {
+    if (!Number.isFinite(value)) {
+      return fallback;
+    }
+
+    return clamp(value, min, max);
+  }
+
+  tryToPickerHex(value: string): string | null {
+    const sanitizedValue = sanitizeCssValue(value);
+    if (!sanitizedValue) {
+      return null;
+    }
+
+    if (/^#[0-9a-f]{6}$/i.test(sanitizedValue)) {
+      return sanitizedValue;
+    }
+
+    if (!CSS.supports("color", sanitizedValue)) {
+      return null;
+    }
+
+    const probe = document.createElement("div");
+    probe.setCssProps({ color: sanitizedValue });
+    document.body.append(probe);
+    const resolvedColor = getComputedStyle(probe).color;
+    probe.remove();
+
+    const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (!match) {
+      return null;
+    }
+
+    const [, red, green, blue] = match;
+    return `#${Number(red).toString(16).padStart(2, "0")}${Number(green)
+      .toString(16)
+      .padStart(2, "0")}${Number(blue).toString(16).padStart(2, "0")}`;
+  }
+
+  applyStyles(): void {
+    document.body.classList.add(BODY_CLASS);
+    this.clearCssVariables();
+
+    const appliedMode = this.plugin.getAppliedProfileMode();
+    const profile = this.plugin.getProfile(appliedMode);
+    const effectiveProfile = {
+      ...profile,
+      linkHoverColor: profile.linkColor
+        ? this.computeAutoHoverColor(appliedMode, profile.linkColor)
+        : "",
+      externalLinkHoverColor: profile.externalLinkColor
+        ? this.computeAutoHoverColor(appliedMode, profile.externalLinkColor)
+        : "",
+    };
+
+    const cssProps = Object.fromEntries(
+      Object.entries(CSS_VARIABLES)
+        .map(([key, variableName]) => [
+          variableName,
+          sanitizeCssValue(effectiveProfile[key as StringProfileKey]),
+        ] as const)
+        .filter(([, value]) => Boolean(value))
+    );
+
+    const tagColor = sanitizeCssValue(profile.tagColor);
+    const tagBackground = sanitizeCssValue(profile.tagBackground);
+    const tagBorderColor = sanitizeCssValue(profile.tagBorderColor);
+    const tagHoverBackground = tagBackground
+      ? this.computeAutoHoverColor(appliedMode, tagBackground)
+      : "";
+
+    if (tagColor) {
+      cssProps["--tag-color-hover"] = tagColor;
+    }
+
+    if (tagHoverBackground) {
+      cssProps["--tag-background-hover"] = tagHoverBackground;
+    }
+
+    if (tagBorderColor) {
+      cssProps["--tag-border-color-hover"] = tagBorderColor;
+
+      const themeBorderWidth = Number.parseFloat(
+        this.getThemeDefaultVariableValue("--tag-border-width")
+      );
+      if (!Number.isFinite(themeBorderWidth) || themeBorderWidth <= 0) {
+        cssProps["--tag-border-width"] = "1px";
+      }
+    }
+
+    document.body.setCssProps(cssProps);
+  }
+
+  private clearCssVariables(): void {
+    for (const variableName of CSS_VARIABLE_NAMES) {
+      document.body.style.removeProperty(variableName);
+    }
+  }
+
+  private resolveColorToRgb(value: string): RgbColor | null {
+    const sanitizedValue = sanitizeCssValue(value);
+    if (!sanitizedValue || !CSS.supports("color", sanitizedValue)) {
+      return null;
+    }
+
+    const probe = document.createElement("div");
+    probe.setCssProps({ color: sanitizedValue });
+    document.body.append(probe);
+    const resolvedColor = getComputedStyle(probe).color;
+    probe.remove();
+
+    const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+    if (!match) {
+      return null;
+    }
+
+    return {
+      r: Number(match[1]),
+      g: Number(match[2]),
+      b: Number(match[3]),
+      a: match[4] ? Number(match[4]) : 1,
+    };
+  }
+
+  private computeAutoHoverColor(mode: ProfileMode, baseValue: string): string {
+    const rgbColor = this.resolveColorToRgb(baseValue);
+    if (!rgbColor) {
+      return "";
+    }
+
+    const hslColor = rgbToHsl(rgbColor.r, rgbColor.g, rgbColor.b);
+    const hoverLightnessDelta = mode === "dark" ? 3.8 : 5;
+    const hoverLightness = clamp(hslColor.l + hoverLightnessDelta, 0, 100);
+
+    return `hsl(${formatNumber(hslColor.h, 1)}, ${formatNumber(hslColor.s, 1)}%, ${formatNumber(hoverLightness, 1)}%)`;
+  }
+}
