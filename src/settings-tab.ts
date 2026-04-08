@@ -1,6 +1,7 @@
 import {
   App,
   ColorComponent,
+  ExtraButtonComponent,
   Notice,
   PluginSettingTab,
   Setting,
@@ -60,16 +61,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   override display(): void {
     const { containerEl } = this;
     const editedMode = this.plugin.getEditedProfileMode();
-    const appliedMode = this.plugin.getAppliedProfileMode();
     const otherMode = editedMode === "light" ? "dark" : "light";
 
     containerEl.empty();
     containerEl.addClass("default-theme-style-tuner-settings");
-
-    containerEl.createEl("p", {
-      text: `Profiles switch automatically with Obsidian's theme. Active theme: ${PROFILE_LABELS[this.plugin.getThemeMode()]}. Applied profile: ${PROFILE_LABELS[appliedMode]}. Editing: ${PROFILE_LABELS[editedMode]}.`,
-      cls: "setting-item-description default-theme-style-tuner-intro",
-    });
 
     new Setting(containerEl)
       .setName("Profile to edit")
@@ -253,23 +248,31 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private addColorSetting(containerEl: HTMLElement, mode: ProfileMode, option: ColorOption): void {
     let colorPickerComponent: ColorComponent | null = null;
+    let resetButton: ExtraButtonComponent | null = null;
+    const hasOverride = Boolean(this.plugin.getProfile(mode)[option.key]);
+    let isSyncing = false;
 
     new Setting(containerEl)
       .setName(option.name)
       .setDesc(`${option.description} Reset to inherit the theme default.`)
-      .addExtraButton((button) =>
+      .addExtraButton((button) => {
+        resetButton = button;
         button
           .setIcon("lucide-rotate-ccw")
           .setTooltip("Reset to theme default")
+          .setDisabled(!hasOverride)
           .onClick(async () => {
             await this.plugin.resetProfileValue(mode, option.key);
+            resetButton?.setDisabled(true);
             const themeDefault = this.plugin.styleManager.getThemeDefaultVariableValue(
               option.variableName
             );
             const pickerHex = this.plugin.styleManager.tryToPickerHex(themeDefault) ?? "#000000";
+            isSyncing = true;
             colorPickerComponent?.setValue(pickerHex);
-          })
-      )
+            isSyncing = false;
+          });
+      })
       .addColorPicker((picker) => {
         colorPickerComponent = picker;
         picker
@@ -277,13 +280,18 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             this.plugin.styleManager.getDefaultColorValue(mode, option.key, option.variableName)
           )
           .onChange(async (value) => {
+            if (isSyncing) return;
             await this.plugin.setProfileValue(mode, option.key, value);
+            resetButton?.setDisabled(false);
           });
       });
   }
 
   private addSliderSetting(containerEl: HTMLElement, mode: ProfileMode, option: SliderOption): void {
     let sliderComponent: SliderComponent | null = null;
+    let resetButton: ExtraButtonComponent | null = null;
+    const hasOverride = Boolean(this.plugin.getProfile(mode)[option.key]);
+    let isSyncing = false;
 
     const fallbackValue = this.plugin.styleManager.getDefaultNumericValue(
       mode,
@@ -295,18 +303,22 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(option.name)
       .setDesc(`${option.description} Reset to inherit the theme default.`)
-      .addExtraButton((button) =>
+      .addExtraButton((button) => {
+        resetButton = button;
         button
           .setIcon("lucide-rotate-ccw")
           .setTooltip("Reset to theme default")
+          .setDisabled(!hasOverride)
           .onClick(async () => {
             await this.plugin.resetProfileValue(mode, option.key);
+            resetButton?.setDisabled(true);
             const resetValue = this.plugin.styleManager.getDefaultNumericValue(
               mode,
               option.key,
               option.variableName,
               option.defaultValue
             );
+            isSyncing = true;
             sliderComponent?.setValue(
               this.plugin.styleManager.ensureWithinRange(
                 resetValue,
@@ -315,8 +327,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
                 option.defaultValue
               )
             );
-          })
-      )
+            isSyncing = false;
+          });
+      })
       .addSlider((slider) => {
         sliderComponent = slider;
         slider
@@ -331,11 +344,13 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             )
           )
           .onChange(async (value) => {
+            if (isSyncing) return;
             await this.plugin.setProfileValue(
               mode,
               option.key,
               `${formatNumber(value)}${option.unit}`
             );
+            resetButton?.setDisabled(false);
           });
       });
   }

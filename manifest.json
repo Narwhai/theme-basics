@@ -1,6 +1,6 @@
 {
-  "id": "basic-styling-tuner",
-  "name": "Basic Styling Tuner",
+  "id": "theme-basics",
+  "name": "Theme Basics",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
   "description": "Customize the appearance of Obsidian without plugins. Modify colors, text sizing/spacing, and more",

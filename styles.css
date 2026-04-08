@@ -11,6 +11,15 @@
   min-width: 5rem;
 }
 
+.default-theme-style-tuner-settings .extra-setting-button.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.default-theme-style-tuner-settings .setting-items > .setting-item-heading:first-child {
+  padding-top: 1.5rem;
+}
+
 body.default-theme-style-tuner-active .markdown-rendered,
 body.default-theme-style-tuner-active .markdown-source-view.mod-cm6,
 body.default-theme-style-tuner-active .markdown-source-view.mod-cm6 .cm-scroller,
