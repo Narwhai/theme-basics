@@ -66,6 +66,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("theme-basics-settings");
 
+    // ── Profile controls ──────────────────────────────────────────────
     new Setting(containerEl)
       .setName("Profile to edit")
       .setDesc("Choose whether you are editing the light or dark profile.")
@@ -132,6 +133,106 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         })
       );
 
+    // ── Import / Export ──────────────────────────────────────────────────
+    const ioSection = this.createSection(
+      containerEl,
+      "Import / Export",
+      "Share your settings or generate a standalone CSS snippet."
+    );
+
+    new Setting(ioSection)
+      .setName("Export settings")
+      .setDesc("Download your current settings as a JSON file that can be imported later or shared with others.")
+      .addButton((button) =>
+        button
+          .setButtonText("Export JSON")
+          .setIcon("lucide-download")
+          .onClick(() => {
+            this.plugin.exportSettingsJson();
+          })
+      );
+
+    new Setting(ioSection)
+      .setName("Import settings")
+      .setDesc("Load settings from a previously exported JSON file. This will overwrite your current settings.")
+      .addButton((button) =>
+        button
+          .setButtonText("Import JSON")
+          .setIcon("lucide-upload")
+          .onClick(() => {
+            this.plugin.importSettingsJson(() => {
+              this.refreshDisplayPreserveScroll();
+            });
+          })
+      );
+
+    new Setting(ioSection)
+      .setName("Export as CSS snippet")
+      .setDesc(
+        "Save your current style overrides to .obsidian/snippets/theme-basics.css. " +
+          "You can then enable it in Appearance → CSS snippets and use it without this plugin."
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Export snippet")
+          .setIcon("lucide-file-code")
+          .onClick(async () => {
+            await this.plugin.exportCssSnippet();
+          })
+      );
+
+    // ── Base16 import ──────────────────────────────────────────────────
+    const base16Section = this.createSection(
+      containerEl,
+      "Import Base16 theme",
+      `Seed the ${PROFILE_LABELS[editedMode]} profile from a Base16 YAML color scheme. ` +
+        "The 16 base colors are mapped to backgrounds, text, links, headings, and more. " +
+        "Results are approximate — treat this as a starting point and fine-tune individual values afterwards."
+    );
+
+    let base16Yaml = "";
+
+    new Setting(base16Section)
+      .setName("Base16 YAML")
+      .setDesc(
+        "Paste the full text of a Base16 .yaml file below. " +
+          "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored."
+      )
+      .addTextArea((textarea) => {
+        textarea
+          .setPlaceholder(
+            'scheme: "Mexico Light"\nauthor: "Sheldon Johnson"\nbase00: "f8f8f8"\nbase01: "e8e8e8"\n...'
+          )
+          .onChange((value) => {
+            base16Yaml = value;
+          });
+        textarea.inputEl.rows = 9;
+        textarea.inputEl.style.minWidth = "22rem";
+        textarea.inputEl.style.fontFamily = "var(--font-monospace)";
+        textarea.inputEl.style.fontSize = "var(--font-smaller)";
+        textarea.inputEl.style.resize = "vertical";
+      });
+
+    new Setting(base16Section).addButton((button) =>
+      button
+        .setButtonText(`Apply to ${PROFILE_LABELS[editedMode]} profile`)
+        .setCta()
+        .onClick(async () => {
+          const result = await this.plugin.applyBase16Theme(base16Yaml, editedMode);
+          if (result.success) {
+            new Notice(
+              `Applied ${result.count} Base16 colors to the ${PROFILE_LABELS[editedMode]} profile.`
+            );
+            this.refreshDisplayPreserveScroll();
+          } else {
+            new Notice(
+              'No Base16 colors found. Make sure the YAML contains lines like: base00: "f8f8f8"'
+            );
+          }
+        })
+    );
+
+    // ── Style settings ────────────────────────────────────────────────
     const backgroundsSection = this.createSection(
       containerEl,
       "Backgrounds",
@@ -224,54 +325,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     for (const option of ADVANCED_TAG_OPTIONS) {
       this.addColorSetting(advancedSection, editedMode, option);
     }
-
-    // ── Import / Export ──────────────────────────────────────────────────
-    const ioSection = this.createSection(
-      containerEl,
-      "Import / Export",
-      "Share your settings or generate a standalone CSS snippet."
-    );
-
-    new Setting(ioSection)
-      .setName("Export settings")
-      .setDesc("Download your current settings as a JSON file that can be imported later or shared with others.")
-      .addButton((button) =>
-        button
-          .setButtonText("Export JSON")
-          .setIcon("lucide-download")
-          .onClick(() => {
-            this.plugin.exportSettingsJson();
-          })
-      );
-
-    new Setting(ioSection)
-      .setName("Import settings")
-      .setDesc("Load settings from a previously exported JSON file. This will overwrite your current settings.")
-      .addButton((button) =>
-        button
-          .setButtonText("Import JSON")
-          .setIcon("lucide-upload")
-          .onClick(() => {
-            this.plugin.importSettingsJson(() => {
-              this.refreshDisplayPreserveScroll();
-            });
-          })
-      );
-
-    new Setting(ioSection)
-      .setName("Export as CSS snippet")
-      .setDesc(
-        "Save your current style overrides to .obsidian/snippets/theme-basics.css. " +
-        "You can then enable it in Appearance → CSS snippets and use it without this plugin."
-      )
-      .addButton((button) =>
-        button
-          .setButtonText("Export snippet")
-          .setIcon("lucide-file-code")
-          .onClick(async () => {
-            await this.plugin.exportCssSnippet();
-          })
-      );
   }
 
   private createSection(containerEl: HTMLElement, title: string, description: string): HTMLElement {
