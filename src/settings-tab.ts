@@ -28,9 +28,31 @@ import { formatNumber } from "./utils";
 import type DefaultThemeStyleTunerPlugin from "./main";
 import type { ColorOption, HeadingLevel, ProfileMode, SliderOption } from "./types";
 
+/**
+ * A unique token minted every time {@link display} runs.  Each async handler
+ * captures the token that was current when it was created.  Before touching
+ * the UI the handler compares its token with the live one – if they differ,
+ * the settings tab has been re-rendered since the handler was created and the
+ * handler should bail out instead of operating on stale DOM.
+ */
+type DisplayToken = symbol;
+
 export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
+  /**
+   * The current display token.  Replaced on every {@link display} call.
+   * Handlers compare their captured token against this to detect staleness.
+   */
+  private displayToken: DisplayToken = Symbol();
+
+  /** Cached Base16 YAML text – lives on the instance so it survives re-renders. */
+  private base16Yaml = "";
+
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
     super(app, plugin);
+  }
+
+  override hide(): void {
+    this.containerEl.empty();
   }
 
   refreshDisplayPreserveScroll(): void {
@@ -60,6 +82,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   }
 
   override display(): void {
+    // Mint a fresh token – any handler from a previous display() is now stale.
+    const token: DisplayToken = Symbol();
+    this.displayToken = token;
+
     const { containerEl } = this;
     const editedMode = this.plugin.getEditedProfileMode();
     const otherMode = editedMode === "light" ? "dark" : "light";
@@ -77,11 +103,13 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
           .addOption("dark", "Dark")
           .setValue(editedMode)
           .onChange(async (value) => {
+            if (this.isStale(token)) return;
             if ((value !== "light" && value !== "dark") || value === editedMode) {
               return;
             }
 
             await this.plugin.setEditedProfileMode(value);
+            if (this.isStale(token)) return;
             this.display();
           });
       });
@@ -93,8 +121,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       )
       .addButton((button) =>
         button.setButtonText(`Copy to ${PROFILE_LABELS[otherMode]}`).onClick(async () => {
+          if (this.isStale(token)) return;
           await this.plugin.copyProfile(editedMode, otherMode);
           new Notice(`Copied ${PROFILE_LABELS[editedMode]} profile to ${PROFILE_LABELS[otherMode]}.`);
+          if (this.isStale(token)) return;
           this.refreshDisplayPreserveScroll();
         })
       );
@@ -104,8 +134,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       .setDesc(`Clear every override in the ${PROFILE_LABELS[editedMode]} profile.`)
       .addButton((button) =>
         button.setWarning().setButtonText("Reset profile").onClick(async () => {
+          if (this.isStale(token)) return;
           await this.plugin.resetProfile(editedMode);
           new Notice(`${PROFILE_LABELS[editedMode]} profile reset.`);
+          if (this.isStale(token)) return;
           this.refreshDisplayPreserveScroll();
         })
       );
@@ -115,7 +147,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       .setDesc("Clear every override in both light and dark profiles.")
       .addButton((button) =>
         button.setWarning().setButtonText("Reset both").onClick(async () => {
+          if (this.isStale(token)) return;
           await this.plugin.resetAllSettings();
+          if (this.isStale(token)) return;
           this.refreshDisplayPreserveScroll();
         })
       );
@@ -177,8 +211,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         "Results are approximate — treat this as a starting point and fine-tune individual values afterwards."
     );
 
-    let base16Yaml = "";
-
     new Setting(base16Section)
       .setName("Base16 YAML")
       .setDesc(
@@ -190,8 +222,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
           .setPlaceholder(
             'scheme: "Mexico Light"\nauthor: "Sheldon Johnson"\nbase00: "f8f8f8"\nbase01: "e8e8e8"\n...'
           )
+          .setValue(this.base16Yaml)
           .onChange((value) => {
-            base16Yaml = value;
+            this.base16Yaml = value;
           });
         textarea.inputEl.rows = 9;
         textarea.inputEl.style.minWidth = "22rem";
@@ -205,11 +238,14 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         .setButtonText(`Apply to ${PROFILE_LABELS[editedMode]} profile`)
         .setCta()
         .onClick(async () => {
-          const result = await this.plugin.applyBase16Theme(base16Yaml, editedMode);
+          if (this.isStale(token)) return;
+          const yaml = this.base16Yaml;
+          const result = await this.plugin.applyBase16Theme(yaml, editedMode);
           if (result.success) {
             new Notice(
               `Applied ${result.count} Base16 colors to the ${PROFILE_LABELS[editedMode]} profile.`
             );
+            if (this.isStale(token)) return;
             this.refreshDisplayPreserveScroll();
           } else {
             new Notice(
@@ -232,7 +268,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
     ]) {
       if (option) {
-        this.addColorSetting(backgroundsSection, editedMode, option);
+        this.addColorSetting(backgroundsSection, editedMode, option, token);
       }
     }
 
@@ -241,12 +277,12 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Links and emphasis",
       "Internal links, external links, bold, italic, and highlighted text. Link hover colors are computed automatically."
     );
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.linkColor);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.externalLinkColor);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.unresolvedLinkColor);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.boldColor);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.italicColor);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.highlightBackground);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.linkColor, token);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.externalLinkColor, token);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.unresolvedLinkColor, token);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.boldColor, token);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.italicColor, token);
+    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.highlightBackground, token);
 
     const typographySection = this.createSection(
       containerEl,
@@ -254,10 +290,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Base text size and line spacing for note content in both modes."
     );
     for (const option of TYPOGRAPHY_COLOR_OPTIONS) {
-      this.addColorSetting(typographySection, editedMode, option);
+      this.addColorSetting(typographySection, editedMode, option, token);
     }
     for (const option of TYPOGRAPHY_OPTIONS) {
-      this.addSliderSetting(typographySection, editedMode, option);
+      this.addSliderSetting(typographySection, editedMode, option, token);
     }
 
     const headingsSection = this.createSection(
@@ -266,7 +302,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Per-level heading colors, sizes, weights, and line heights."
     );
     for (const level of HEADING_LEVELS) {
-      this.addHeadingSetting(headingsSection, editedMode, level);
+      this.addHeadingSetting(headingsSection, editedMode, level, token);
     }
 
     const advancedSection = this.createSection(
@@ -281,10 +317,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Adjust list spacing, indentation, and horizontal rule styling."
     );
     for (const option of ADVANCED_LIST_OPTIONS) {
-      this.addSliderSetting(advancedSection, editedMode, option);
+      this.addSliderSetting(advancedSection, editedMode, option, token);
     }
     for (const option of ADVANCED_LIST_COLOR_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option);
+      this.addColorSetting(advancedSection, editedMode, option, token);
     }
 
     this.addSubheading(
@@ -293,7 +329,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Customize blockquote text, background, and border colors."
     );
     for (const option of ADVANCED_BLOCKQUOTE_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option);
+      this.addColorSetting(advancedSection, editedMode, option, token);
     }
 
     this.addSubheading(
@@ -302,16 +338,25 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Control inline code and code block colors and font size."
     );
     for (const option of ADVANCED_CODE_COLOR_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option);
+      this.addColorSetting(advancedSection, editedMode, option, token);
     }
     for (const option of ADVANCED_CODE_SLIDER_OPTIONS) {
-      this.addSliderSetting(advancedSection, editedMode, option);
+      this.addSliderSetting(advancedSection, editedMode, option, token);
     }
 
     this.addSubheading(advancedSection, "Tags", "Style tags in Reading mode and Live Preview.");
     for (const option of ADVANCED_TAG_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option);
+      this.addColorSetting(advancedSection, editedMode, option, token);
     }
+  }
+
+  /**
+   * Returns `true` when the given token no longer matches the live
+   * {@link displayToken}, meaning the settings tab has been re-rendered and
+   * any DOM references captured by the caller are stale.
+   */
+  private isStale(token: DisplayToken): boolean {
+    return token !== this.displayToken;
   }
 
   private createSection(containerEl: HTMLElement, title: string, description: string): HTMLElement {
@@ -327,14 +372,20 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   private addOptionalColorSetting(
     containerEl: HTMLElement,
     mode: ProfileMode,
-    option?: ColorOption
+    option: ColorOption | undefined,
+    token: DisplayToken
   ): void {
     if (option) {
-      this.addColorSetting(containerEl, mode, option);
+      this.addColorSetting(containerEl, mode, option, token);
     }
   }
 
-  private addColorSetting(containerEl: HTMLElement, mode: ProfileMode, option: ColorOption): void {
+  private addColorSetting(
+    containerEl: HTMLElement,
+    mode: ProfileMode,
+    option: ColorOption,
+    token: DisplayToken
+  ): void {
     let colorPickerComponent: ColorComponent | null = null;
     let resetButton: ExtraButtonComponent | null = null;
     const hasOverride = Boolean(this.plugin.getProfile(mode)[option.key]);
@@ -350,7 +401,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
           .setTooltip("Reset to theme default")
           .setDisabled(!hasOverride)
           .onClick(async () => {
+            if (this.isStale(token)) return;
             await this.plugin.resetProfileValue(mode, option.key);
+            if (this.isStale(token)) return;
             resetButton?.setDisabled(true);
             const pickerHex = this.plugin.styleManager.getDefaultColorValue(
               mode,
@@ -369,14 +422,20 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             this.plugin.styleManager.getDefaultColorValue(mode, option.key, option.variableName)
           )
           .onChange(async (value) => {
-            if (isSyncing) return;
+            if (isSyncing || this.isStale(token)) return;
             await this.plugin.setProfileValue(mode, option.key, value);
+            if (this.isStale(token)) return;
             resetButton?.setDisabled(false);
           });
       });
   }
 
-  private addSliderSetting(containerEl: HTMLElement, mode: ProfileMode, option: SliderOption): void {
+  private addSliderSetting(
+    containerEl: HTMLElement,
+    mode: ProfileMode,
+    option: SliderOption,
+    token: DisplayToken
+  ): void {
     let sliderComponent: SliderComponent | null = null;
     let resetButton: ExtraButtonComponent | null = null;
     const hasOverride = Boolean(this.plugin.getProfile(mode)[option.key]);
@@ -399,7 +458,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
           .setTooltip("Reset to theme default")
           .setDisabled(!hasOverride)
           .onClick(async () => {
+            if (this.isStale(token)) return;
             await this.plugin.resetProfileValue(mode, option.key);
+            if (this.isStale(token)) return;
             resetButton?.setDisabled(true);
             const resetValue = this.plugin.styleManager.getDefaultNumericValue(
               mode,
@@ -433,18 +494,24 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             )
           )
           .onChange(async (value) => {
-            if (isSyncing) return;
+            if (isSyncing || this.isStale(token)) return;
             await this.plugin.setProfileValue(
               mode,
               option.key,
               `${formatNumber(value)}${option.unit}`
             );
+            if (this.isStale(token)) return;
             resetButton?.setDisabled(false);
           });
       });
   }
 
-  private addHeadingSetting(containerEl: HTMLElement, mode: ProfileMode, level: HeadingLevel): void {
+  private addHeadingSetting(
+    containerEl: HTMLElement,
+    mode: ProfileMode,
+    level: HeadingLevel,
+    token: DisplayToken
+  ): void {
     const defaults = HEADING_DEFAULTS[level];
 
     new Setting(containerEl).setName(`H${level}`).setHeading();
@@ -454,7 +521,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       name: "Color",
       description: `Text color for H${level} headings.`,
       variableName: `--h${level}-color`,
-    });
+    }, token);
 
     this.addSliderSetting(containerEl, mode, {
       key: `h${level}Size`,
@@ -466,7 +533,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       step: 0.01,
       unit: "em",
       defaultValue: defaults.size,
-    });
+    }, token);
 
     this.addSliderSetting(containerEl, mode, {
       key: `h${level}Weight`,
@@ -478,7 +545,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       step: 100,
       unit: "",
       defaultValue: defaults.weight,
-    });
+    }, token);
 
     this.addSliderSetting(containerEl, mode, {
       key: `h${level}LineHeight`,
@@ -490,6 +557,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       step: 0.05,
       unit: "",
       defaultValue: defaults.lineHeight,
-    });
+    }, token);
   }
 }
