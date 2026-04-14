@@ -190,8 +190,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     new Setting(ioSection)
       .setName("Export as CSS snippet")
       .setDesc(
-        "Save your current style overrides to .obsidian/snippets/theme-basics.css. " +
-          "You can then enable it in Appearance → CSS snippets and use it without this plugin."
+        `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
+        "You can then enable it in Appearance → CSS snippets and use it without this plugin."
       )
       .addButton((button) =>
         button
@@ -207,30 +207,28 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       containerEl,
       "Import Base16 theme",
       `Seed the ${PROFILE_LABELS[editedMode]} profile from a Base16 YAML color scheme. ` +
-        "The 16 base colors are mapped to backgrounds, text, links, headings, and more. " +
-        "Results are approximate — treat this as a starting point and fine-tune individual values afterwards."
+      "The 16 base colors are mapped to backgrounds, text, links, headings, and more. " +
+      "Results are approximate — treat this as a starting point and fine-tune individual values afterwards."
     );
 
     new Setting(base16Section)
       .setName("Base16 YAML")
       .setDesc(
         "Paste the full text of a Base16 .yaml file below. " +
-          "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored."
+        "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored."
       )
       .addTextArea((textarea) => {
         textarea
           .setPlaceholder(
-            'scheme: "Mexico Light"\nauthor: "Sheldon Johnson"\nbase00: "f8f8f8"\nbase01: "e8e8e8"\n...'
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
+            'scheme: "Theme Name"\nauthor: "Author Name"\nbase00: "f8f8f8"\nbase01: "e8e8e8"\n...'
           )
           .setValue(this.base16Yaml)
           .onChange((value) => {
             this.base16Yaml = value;
           });
         textarea.inputEl.rows = 9;
-        textarea.inputEl.style.minWidth = "22rem";
-        textarea.inputEl.style.fontFamily = "var(--font-monospace)";
-        textarea.inputEl.style.fontSize = "var(--font-smaller)";
-        textarea.inputEl.style.resize = "vertical";
+        textarea.inputEl.addClass("theme-basics-base16-textarea");
       });
 
     new Setting(base16Section).addButton((button) =>
@@ -249,7 +247,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             this.refreshDisplayPreserveScroll();
           } else {
             new Notice(
-              'No Base16 colors found. Make sure the YAML contains lines like: base00: "f8f8f8"'
+              'No base16 colors found. Make sure the YAML contains lines like: base00: "f8f8f8"'
             );
           }
         })

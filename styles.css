@@ -19,3 +19,10 @@
 .theme-basics-settings .setting-items > .setting-item-heading:first-child {
   padding-top: 1.5rem;
 }
+
+.theme-basics-settings .theme-basics-base16-textarea {
+  min-width: 22rem;
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  resize: vertical;
+}

@@ -166,16 +166,17 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
   async exportCssSnippet(): Promise<void> {
     const css = this.styleManager.generateSnippetCss();
-    const snippetPath = ".obsidian/snippets/theme-basics.css";
+    const snippetsDir = `${this.app.vault.configDir}/snippets`;
+    const snippetPath = `${snippetsDir}/theme-basics.css`;
     try {
-      await this.app.vault.adapter.mkdir(".obsidian/snippets");
+      await this.app.vault.adapter.mkdir(snippetsDir);
     } catch {
       // Folder likely already exists — ignore
     }
     try {
       await this.app.vault.adapter.write(snippetPath, css);
       new Notice(
-        "Snippet saved to .obsidian/snippets/theme-basics.css — enable it in Appearance → CSS snippets."
+        `Snippet saved to ${snippetPath} — enable it in Appearance → CSS snippets.`
       );
     } catch (error) {
       new Notice("Failed to save CSS snippet. See console for details.");
