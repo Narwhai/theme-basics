@@ -4,10 +4,25 @@ import { clamp, formatNumber, rgbToHsl, sanitizeCssValue } from "./utils";
 import type DefaultThemeStyleTunerPlugin from "./main";
 import type { ProfileMode, RgbColor, StringProfileKey } from "./types";
 
-export class StyleManager {
-  private themeDefaults: Record<string, string> = {};
+const CAPTURED_THEME_VARIABLE_NAMES = [
+  ...CSS_VARIABLE_NAMES,
+  "--tag-border-width",
+] as const;
 
-  constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) {}
+const APPLIED_STYLE_VARIABLE_NAMES = [
+  ...CAPTURED_THEME_VARIABLE_NAMES,
+  "--tag-color-hover",
+  "--tag-background-hover",
+  "--tag-border-color-hover",
+] as const;
+
+export class StyleManager {
+  private themeDefaults: Record<ProfileMode, Record<string, string>> = {
+    light: {},
+    dark: {},
+  };
+
+  constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
 
   cleanup(): void {
     document.body.classList.remove(BODY_CLASS);
@@ -15,26 +30,33 @@ export class StyleManager {
   }
 
   refreshThemeDefaults(): void {
+    const wasLightTheme = document.body.classList.contains("theme-light");
+    const wasDarkTheme = document.body.classList.contains("theme-dark");
     const hadPluginClass = document.body.classList.contains(BODY_CLASS);
+    const previousInlineValues = this.captureInlineVariableValues(APPLIED_STYLE_VARIABLE_NAMES);
+
     if (hadPluginClass) {
       document.body.classList.remove(BODY_CLASS);
     }
 
-    const computedStyle = getComputedStyle(document.body);
-    this.themeDefaults = Object.fromEntries(
-      CSS_VARIABLE_NAMES.map((variableName) => [
-        variableName,
-        computedStyle.getPropertyValue(variableName).trim(),
-      ])
-    );
+    this.clearCssVariables();
+
+    this.themeDefaults = {
+      light: this.captureThemeDefaultsForMode("light"),
+      dark: this.captureThemeDefaultsForMode("dark"),
+    };
+
+    document.body.classList.toggle("theme-light", wasLightTheme);
+    document.body.classList.toggle("theme-dark", wasDarkTheme);
+    this.restoreInlineVariableValues(previousInlineValues);
 
     if (hadPluginClass) {
       document.body.classList.add(BODY_CLASS);
     }
   }
 
-  getThemeDefaultVariableValue(variableName: string): string {
-    return this.themeDefaults[variableName] ?? "";
+  getThemeDefaultVariableValue(variableName: string, mode: ProfileMode): string {
+    return this.themeDefaults[mode]?.[variableName] ?? "";
   }
 
   getDefaultNumericValue(
@@ -45,15 +67,29 @@ export class StyleManager {
   ): number {
     const explicitValue = this.plugin.getProfile(mode)[key];
     const parsedValue = Number.parseFloat(
-      explicitValue || this.getThemeDefaultVariableValue(variableName)
+      explicitValue || this.getThemeDefaultVariableValue(variableName, mode)
     );
 
     return Number.isFinite(parsedValue) ? parsedValue : fallbackNumber;
   }
 
   getDefaultColorValue(mode: ProfileMode, key: StringProfileKey, variableName: string): string {
+    const pickerHex = this.tryToPickerHex(
+      this.plugin.getProfile(mode)[key] || this.getThemeDefaultVariableValue(variableName, mode)
+    );
+    if (pickerHex) {
+      return pickerHex;
+    }
+
+    // Some color variables (e.g. --h1-color, --bold-color) are not defined as
+    // standalone custom properties by the theme.  The corresponding CSS rules
+    // use `var(--h1-color)` without a fallback, which causes Obsidian to
+    // treat the property as "invalid at computed-value time" and inherit from
+    // the parent – effectively inheriting --text-normal.  Mirror that behaviour
+    // in the picker so the swatch shows the correct inherited colour instead of
+    // the hardcoded #000000 fallback.
     return this.tryToPickerHex(
-      this.plugin.getProfile(mode)[key] || this.getThemeDefaultVariableValue(variableName)
+      this.getThemeDefaultVariableValue("--text-normal", mode)
     ) ?? "#000000";
   }
 
@@ -136,7 +172,7 @@ export class StyleManager {
       cssProps["--tag-border-color-hover"] = tagBorderColor;
 
       const themeBorderWidth = Number.parseFloat(
-        this.getThemeDefaultVariableValue("--tag-border-width")
+        this.getThemeDefaultVariableValue("--tag-border-width", mode)
       );
       if (!Number.isFinite(themeBorderWidth) || themeBorderWidth <= 0) {
         cssProps["--tag-border-width"] = "1px";
@@ -184,8 +220,37 @@ export class StyleManager {
   }
 
   private clearCssVariables(): void {
-    for (const variableName of CSS_VARIABLE_NAMES) {
+    for (const variableName of APPLIED_STYLE_VARIABLE_NAMES) {
       document.body.style.removeProperty(variableName);
+    }
+  }
+
+  private captureThemeDefaultsForMode(mode: ProfileMode): Record<string, string> {
+    document.body.classList.toggle("theme-light", mode === "light");
+    document.body.classList.toggle("theme-dark", mode === "dark");
+
+    const computedStyle = getComputedStyle(document.body);
+    return Object.fromEntries(
+      CAPTURED_THEME_VARIABLE_NAMES.map((variableName) => [
+        variableName,
+        computedStyle.getPropertyValue(variableName).trim(),
+      ])
+    );
+  }
+
+  private captureInlineVariableValues(variableNames: readonly string[]): Record<string, string> {
+    return Object.fromEntries(
+      variableNames.map((variableName) => [variableName, document.body.style.getPropertyValue(variableName)])
+    );
+  }
+
+  private restoreInlineVariableValues(values: Record<string, string>): void {
+    for (const [variableName, value] of Object.entries(values)) {
+      if (value) {
+        document.body.style.setProperty(variableName, value);
+      } else {
+        document.body.style.removeProperty(variableName);
+      }
     }
   }
 

@@ -10,7 +10,6 @@ import type {
 } from "./types";
 
 export const BODY_CLASS = "theme-basics-active";
-export const STYLE_ELEMENT_ID = "theme-basics-inline-styles";
 
 export const PROFILE_LABELS: Record<ProfileMode, string> = {
   light: "Light",

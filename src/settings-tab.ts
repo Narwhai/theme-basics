@@ -1,6 +1,7 @@
 import {
   App,
   ColorComponent,
+  DropdownComponent,
   ExtraButtonComponent,
   Notice,
   PluginSettingTab,
@@ -70,33 +71,19 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Profile to edit")
       .setDesc("Choose whether you are editing the light or dark profile.")
-      .addButton((button) => {
-        button
-          .setButtonText("Light")
-          .setClass("theme-basics-profile-button")
-          .onClick(async () => {
-            await this.plugin.setEditedProfileMode("light");
-            this.refreshDisplayPreserveScroll();
-          });
+      .addDropdown((dropdown: DropdownComponent) => {
+        dropdown
+          .addOption("light", "Light")
+          .addOption("dark", "Dark")
+          .setValue(editedMode)
+          .onChange(async (value) => {
+            if ((value !== "light" && value !== "dark") || value === editedMode) {
+              return;
+            }
 
-        if (editedMode === "light") {
-          button.buttonEl.addClass("is-active");
-          button.setCta();
-        }
-      })
-      .addButton((button) => {
-        button
-          .setButtonText("Dark")
-          .setClass("theme-basics-profile-button")
-          .onClick(async () => {
-            await this.plugin.setEditedProfileMode("dark");
-            this.refreshDisplayPreserveScroll();
+            await this.plugin.setEditedProfileMode(value);
+            this.display();
           });
-
-        if (editedMode === "dark") {
-          button.buttonEl.addClass("is-active");
-          button.setCta();
-        }
       });
 
     new Setting(containerEl)
@@ -365,10 +352,11 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
           .onClick(async () => {
             await this.plugin.resetProfileValue(mode, option.key);
             resetButton?.setDisabled(true);
-            const themeDefault = this.plugin.styleManager.getThemeDefaultVariableValue(
+            const pickerHex = this.plugin.styleManager.getDefaultColorValue(
+              mode,
+              option.key,
               option.variableName
             );
-            const pickerHex = this.plugin.styleManager.tryToPickerHex(themeDefault) ?? "#000000";
             isSyncing = true;
             colorPickerComponent?.setValue(pickerHex);
             isSyncing = false;
