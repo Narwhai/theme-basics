@@ -1,11 +1,19 @@
 import type { DefaultThemeStyleTunerProfile, HslColor } from "./types";
 
+const BLOCKED_CSS_PATTERNS = /url\s*\(|expression\s*\(|@import|behavior\s*:|\\00/i;
+
 export function sanitizeCssValue(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.trim().replace(/[;{}]/g, "");
+  const trimmed = value.trim().replace(/[;{}]/g, "");
+
+  if (BLOCKED_CSS_PATTERNS.test(trimmed)) {
+    return "";
+  }
+
+  return trimmed;
 }
 
 export function cloneProfile(
@@ -54,7 +62,7 @@ export function rgbToHsl(r: number, g: number, b: number): HslColor {
 
     switch (max) {
       case red:
-        hue = 60 * (((green - blue) / delta) % 6);
+        hue = 60 * ((((green - blue) / delta) % 6 + 6) % 6);
         break;
       case green:
         hue = 60 * ((blue - red) / delta + 2);

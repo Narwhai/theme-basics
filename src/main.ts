@@ -73,14 +73,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     value: DefaultThemeStyleTunerProfile[Key]
   ): Promise<void> {
     const profile = this.getProfile(mode);
-    const defaultValue = DEFAULT_PROFILE[key];
-
-    if (typeof defaultValue === "boolean") {
-      profile[key] = (typeof value === "boolean" ? value : defaultValue) as DefaultThemeStyleTunerProfile[Key];
-    } else {
-      profile[key] = sanitizeCssValue(typeof value === "string" ? value : "") as DefaultThemeStyleTunerProfile[Key];
-    }
-
+    profile[key] = sanitizeCssValue(typeof value === "string" ? value : "") as DefaultThemeStyleTunerProfile[Key];
     await this.saveSettings();
   }
 
@@ -88,8 +81,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     mode: ProfileMode,
     key: Key
   ): Promise<void> {
-    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
-    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
+    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string>;
+    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
     profile[key] = defaultProfile[key];
     await this.saveSettings();
   }
@@ -98,8 +91,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     mode: ProfileMode,
     keys: ReadonlyArray<keyof DefaultThemeStyleTunerProfile>
   ): Promise<void> {
-    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
-    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
+    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string>;
+    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
 
     for (const key of keys) {
       profile[key] = defaultProfile[key];
@@ -150,6 +143,11 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
+      const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MB
+      if (file.size > MAX_IMPORT_SIZE) {
+        new Notice("Import failed: file exceeds 1 MB size limit.");
+        return;
+      }
       try {
         const text = await file.text();
         const parsed: unknown = JSON.parse(text);
@@ -197,7 +195,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
     const profile = this.getProfile(mode) as Record<
       keyof DefaultThemeStyleTunerProfile,
-      string | boolean
+      string
     >;
 
     const apply = (key: keyof DefaultThemeStyleTunerProfile, hex: string | undefined): void => {
@@ -358,18 +356,10 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       return normalizedProfile;
     }
 
-    const mutableProfile = normalizedProfile as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
-    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string | boolean>;
+    const mutableProfile = normalizedProfile as Record<keyof DefaultThemeStyleTunerProfile, string>;
 
     for (const key of PROFILE_KEYS) {
       const nextValue = source[key];
-      const defaultValue = defaultProfile[key];
-
-      if (typeof defaultValue === "boolean") {
-        mutableProfile[key] = typeof nextValue === "boolean" ? nextValue : defaultValue;
-        continue;
-      }
-
       mutableProfile[key] = typeof nextValue === "string" ? sanitizeCssValue(nextValue) : "";
     }
 

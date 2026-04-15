@@ -22,16 +22,26 @@ export class StyleManager {
     dark: {},
   };
 
+  /** Color resolution cache — keyed by raw CSS value, maps to picker hex or null. */
+  private pickerHexCache = new Map<string, string | null>();
+
+  /** Pending RAF id for debounced applyStyles. */
+  private applyStylesRafId: number | null = null;
+
   constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
 
   cleanup(): void {
+    if (this.applyStylesRafId !== null) {
+      cancelAnimationFrame(this.applyStylesRafId);
+      this.applyStylesRafId = null;
+    }
     document.body.classList.remove(BODY_CLASS);
     this.clearCssVariables();
   }
 
   refreshThemeDefaults(): void {
-    const wasLightTheme = document.body.classList.contains("theme-light");
-    const wasDarkTheme = document.body.classList.contains("theme-dark");
+    this.pickerHexCache.clear();
+
     const hadPluginClass = document.body.classList.contains(BODY_CLASS);
     const previousInlineValues = this.captureInlineVariableValues(APPLIED_STYLE_VARIABLE_NAMES);
 
@@ -46,8 +56,6 @@ export class StyleManager {
       dark: this.captureThemeDefaultsForMode("dark"),
     };
 
-    document.body.classList.toggle("theme-light", wasLightTheme);
-    document.body.classList.toggle("theme-dark", wasDarkTheme);
     this.restoreInlineVariableValues(previousInlineValues);
 
     if (hadPluginClass) {
@@ -107,11 +115,18 @@ export class StyleManager {
       return null;
     }
 
+    const cached = this.pickerHexCache.get(sanitizedValue);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     if (/^#[0-9a-f]{6}$/i.test(sanitizedValue)) {
+      this.pickerHexCache.set(sanitizedValue, sanitizedValue);
       return sanitizedValue;
     }
 
     if (!CSS.supports("color", sanitizedValue)) {
+      this.pickerHexCache.set(sanitizedValue, null);
       return null;
     }
 
@@ -123,13 +138,16 @@ export class StyleManager {
 
     const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
     if (!match) {
+      this.pickerHexCache.set(sanitizedValue, null);
       return null;
     }
 
     const [, red, green, blue] = match;
-    return `#${Number(red).toString(16).padStart(2, "0")}${Number(green)
+    const hex = `#${Number(red).toString(16).padStart(2, "0")}${Number(green)
       .toString(16)
       .padStart(2, "0")}${Number(blue).toString(16).padStart(2, "0")}`;
+    this.pickerHexCache.set(sanitizedValue, hex);
+    return hex;
   }
 
   buildCssPropertiesForMode(mode: ProfileMode): Record<string, string> {
@@ -183,10 +201,16 @@ export class StyleManager {
   }
 
   applyStyles(): void {
-    document.body.classList.add(BODY_CLASS);
-    this.clearCssVariables();
-    const appliedMode = this.plugin.getAppliedProfileMode();
-    document.body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
+    if (this.applyStylesRafId !== null) {
+      cancelAnimationFrame(this.applyStylesRafId);
+    }
+    this.applyStylesRafId = requestAnimationFrame(() => {
+      this.applyStylesRafId = null;
+      document.body.classList.add(BODY_CLASS);
+      this.clearCssVariables();
+      const appliedMode = this.plugin.getAppliedProfileMode();
+      document.body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
+    });
   }
 
   generateSnippetCss(): string {
@@ -226,16 +250,29 @@ export class StyleManager {
   }
 
   private captureThemeDefaultsForMode(mode: ProfileMode): Record<string, string> {
-    document.body.classList.toggle("theme-light", mode === "light");
-    document.body.classList.toggle("theme-dark", mode === "dark");
+    // Use an offscreen element to avoid toggling classes on the live body,
+    // which would force a full document style recalculation.
+    const offscreen = document.createElement("div");
+    offscreen.className = mode === "light" ? "theme-light" : "theme-dark";
+    offscreen.style.position = "absolute";
+    offscreen.style.left = "-9999px";
+    offscreen.style.top = "-9999px";
+    offscreen.style.width = "0";
+    offscreen.style.height = "0";
+    offscreen.style.overflow = "hidden";
+    offscreen.style.pointerEvents = "none";
+    document.body.append(offscreen);
 
-    const computedStyle = getComputedStyle(document.body);
-    return Object.fromEntries(
+    const computedStyle = getComputedStyle(offscreen);
+    const defaults = Object.fromEntries(
       CAPTURED_THEME_VARIABLE_NAMES.map((variableName) => [
         variableName,
         computedStyle.getPropertyValue(variableName).trim(),
       ])
     );
+
+    offscreen.remove();
+    return defaults;
   }
 
   private captureInlineVariableValues(variableNames: readonly string[]): Record<string, string> {

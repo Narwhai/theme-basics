@@ -9,10 +9,8 @@ export interface DefaultThemeStyleTunerProfile {
   textMuted: string;
   textFaint: string;
   linkColor: string;
-  linkHoverAuto: boolean;
   linkHoverColor: string;
   externalLinkColor: string;
-  externalLinkHoverAuto: boolean;
   externalLinkHoverColor: string;
   unresolvedLinkColor: string;
   boldColor: string;
@@ -70,10 +68,6 @@ export type StringProfileKey = {
   [Key in keyof DefaultThemeStyleTunerProfile]: DefaultThemeStyleTunerProfile[Key] extends string ? Key : never;
 }[keyof DefaultThemeStyleTunerProfile];
 
-export type BooleanProfileKey = {
-  [Key in keyof DefaultThemeStyleTunerProfile]: DefaultThemeStyleTunerProfile[Key] extends boolean ? Key : never;
-}[keyof DefaultThemeStyleTunerProfile];
-
 export interface BaseProfileOption<Key extends StringProfileKey = StringProfileKey> {
   key: Key;
   name: string;
@@ -82,11 +76,7 @@ export interface BaseProfileOption<Key extends StringProfileKey = StringProfileK
 }
 
 export interface ColorOption<Key extends StringProfileKey = StringProfileKey>
-  extends BaseProfileOption<Key> {
-  autoToggleKey?: BooleanProfileKey;
-  autoSourceKey?: StringProfileKey;
-  autoToggleName?: string;
-}
+  extends BaseProfileOption<Key> {}
 
 export interface SliderOption<Key extends StringProfileKey = StringProfileKey>
   extends BaseProfileOption<Key> {
