@@ -1,3 +1,5 @@
+import { debounce } from "obsidian";
+
 import { BODY_CLASS, CSS_VARIABLE_NAMES, CSS_VARIABLES } from "./constants";
 import { clamp, formatNumber, rgbToHsl, sanitizeCssValue } from "./utils";
 
@@ -25,16 +27,18 @@ export class StyleManager {
   /** Color resolution cache — keyed by raw CSS value, maps to picker hex or null. */
   private pickerHexCache = new Map<string, string | null>();
 
-  /** Pending RAF id for debounced applyStyles. */
-  private applyStylesRafId: number | null = null;
+  /** Debounced style application — coalesces rapid changes. */
+  private debouncedApply = debounce(() => {
+    document.body.classList.add(BODY_CLASS);
+    this.clearCssVariables();
+    const appliedMode = this.plugin.getAppliedProfileMode();
+    document.body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
+  }, 16, true);
 
   constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
 
   cleanup(): void {
-    if (this.applyStylesRafId !== null) {
-      cancelAnimationFrame(this.applyStylesRafId);
-      this.applyStylesRafId = null;
-    }
+    this.debouncedApply.cancel();
     document.body.classList.remove(BODY_CLASS);
     this.clearCssVariables();
   }
@@ -201,16 +205,7 @@ export class StyleManager {
   }
 
   applyStyles(): void {
-    if (this.applyStylesRafId !== null) {
-      cancelAnimationFrame(this.applyStylesRafId);
-    }
-    this.applyStylesRafId = requestAnimationFrame(() => {
-      this.applyStylesRafId = null;
-      document.body.classList.add(BODY_CLASS);
-      this.clearCssVariables();
-      const appliedMode = this.plugin.getAppliedProfileMode();
-      document.body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
-    });
+    this.debouncedApply();
   }
 
   generateSnippetCss(): string {
@@ -254,13 +249,15 @@ export class StyleManager {
     // which would force a full document style recalculation.
     const offscreen = document.createElement("div");
     offscreen.className = mode === "light" ? "theme-light" : "theme-dark";
-    offscreen.style.position = "absolute";
-    offscreen.style.left = "-9999px";
-    offscreen.style.top = "-9999px";
-    offscreen.style.width = "0";
-    offscreen.style.height = "0";
-    offscreen.style.overflow = "hidden";
-    offscreen.style.pointerEvents = "none";
+    offscreen.setCssProps({
+      position: "absolute",
+      left: "-9999px",
+      top: "-9999px",
+      width: "0",
+      height: "0",
+      overflow: "hidden",
+      "pointer-events": "none",
+    });
     document.body.append(offscreen);
 
     const computedStyle = getComputedStyle(offscreen);

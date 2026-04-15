@@ -23,6 +23,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     this.addSettingTab(new DefaultThemeStyleTunerSettingTab(this.app, this));
     this.registerCommands();
 
+    this.register(() => this.styleManager.cleanup());
+
     this.registerEvent(
       this.app.workspace.on("css-change", () => {
         this.styleManager.refreshThemeDefaults();
@@ -31,11 +33,9 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     );
   }
 
-  override onunload(): void {
-    this.styleManager.cleanup();
-  }
-
   getThemeMode(): ProfileMode {
+    // Note: app.isDarkMode() is available since Obsidian 1.10.0 but the
+    // plugin currently targets 1.8.7.  Using DOM check for compatibility.
     return document.body.classList.contains("theme-dark") ? "dark" : "light";
   }
 
@@ -145,6 +145,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       if (!file) return;
       const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MB
       if (file.size > MAX_IMPORT_SIZE) {
+        // eslint-disable-next-line obsidianmd/ui/sentence-case
         new Notice("Import failed: file exceeds 1 MB size limit.");
         return;
       }
@@ -308,7 +309,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       id: "import-settings-json",
       name: "Import settings from JSON",
       callback: () => {
-        this.importSettingsJson(() => {});
+        this.importSettingsJson(() => { });
       },
     });
 
