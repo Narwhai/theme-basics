@@ -27,6 +27,12 @@ export class StyleManager {
   /** Color resolution cache — keyed by raw CSS value, maps to picker hex or null. */
   private pickerHexCache = new Map<string, string | null>();
 
+  /** Auto-hover color cache — keyed by mode + base value. */
+  private hoverColorCache = new Map<string, string>();
+
+  /** Reused off-screen element for color resolution. */
+  private colorProbe: HTMLDivElement | null = null;
+
   /** Debounced style application — coalesces rapid changes. */
   private debouncedApply = debounce(() => {
     document.body.classList.add(BODY_CLASS);
@@ -37,14 +43,34 @@ export class StyleManager {
 
   constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
 
+  private getColorProbe(): HTMLDivElement {
+    if (!this.colorProbe) {
+      this.colorProbe = document.createElement("div");
+      this.colorProbe.setCssProps({
+        position: "absolute",
+        left: "-9999px",
+        top: "-9999px",
+        width: "0",
+        height: "0",
+        overflow: "hidden",
+        "pointer-events": "none",
+      });
+      document.body.append(this.colorProbe);
+    }
+    return this.colorProbe;
+  }
+
   cleanup(): void {
     this.debouncedApply.cancel();
     document.body.classList.remove(BODY_CLASS);
     this.clearCssVariables();
+    this.colorProbe?.remove();
+    this.colorProbe = null;
   }
 
   refreshThemeDefaults(): void {
     this.pickerHexCache.clear();
+    this.hoverColorCache.clear();
 
     const hadPluginClass = document.body.classList.contains(BODY_CLASS);
     const previousInlineValues = this.captureInlineVariableValues(APPLIED_STYLE_VARIABLE_NAMES);
@@ -129,27 +155,13 @@ export class StyleManager {
       return sanitizedValue;
     }
 
-    if (!CSS.supports("color", sanitizedValue)) {
+    const rgb = this.resolveColor(sanitizedValue);
+    if (!rgb) {
       this.pickerHexCache.set(sanitizedValue, null);
       return null;
     }
 
-    const probe = document.createElement("div");
-    probe.setCssProps({ color: sanitizedValue });
-    document.body.append(probe);
-    const resolvedColor = getComputedStyle(probe).color;
-    probe.remove();
-
-    const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-    if (!match) {
-      this.pickerHexCache.set(sanitizedValue, null);
-      return null;
-    }
-
-    const [, red, green, blue] = match;
-    const hex = `#${Number(red).toString(16).padStart(2, "0")}${Number(green)
-      .toString(16)
-      .padStart(2, "0")}${Number(blue).toString(16).padStart(2, "0")}`;
+    const hex = `#${rgb.r.toString(16).padStart(2, "0")}${rgb.g.toString(16).padStart(2, "0")}${rgb.b.toString(16).padStart(2, "0")}`;
     this.pickerHexCache.set(sanitizedValue, hex);
     return hex;
   }
@@ -239,6 +251,9 @@ export class StyleManager {
   }
 
   private clearCssVariables(): void {
+    // setCssProps can only set values; removing a custom property requires
+    // removeProperty so that theme defaults are restored rather than overridden
+    // with an empty string.
     for (const variableName of APPLIED_STYLE_VARIABLE_NAMES) {
       document.body.style.removeProperty(variableName);
     }
@@ -279,26 +294,26 @@ export class StyleManager {
   }
 
   private restoreInlineVariableValues(values: Record<string, string>): void {
+    const toSet: Record<string, string> = {};
     for (const [variableName, value] of Object.entries(values)) {
       if (value) {
-        document.body.style.setProperty(variableName, value);
+        toSet[variableName] = value;
       } else {
         document.body.style.removeProperty(variableName);
       }
     }
+    document.body.setCssProps(toSet);
   }
 
-  private resolveColorToRgb(value: string): RgbColor | null {
+  private resolveColor(value: string): RgbColor | null {
     const sanitizedValue = sanitizeCssValue(value);
     if (!sanitizedValue || !CSS.supports("color", sanitizedValue)) {
       return null;
     }
 
-    const probe = document.createElement("div");
+    const probe = this.getColorProbe();
     probe.setCssProps({ color: sanitizedValue });
-    document.body.append(probe);
     const resolvedColor = getComputedStyle(probe).color;
-    probe.remove();
 
     const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
     if (!match) {
@@ -314,15 +329,23 @@ export class StyleManager {
   }
 
   private computeAutoHoverColor(mode: ProfileMode, baseValue: string): string {
-    const rgbColor = this.resolveColorToRgb(baseValue);
+    const cacheKey = `${mode}:${baseValue}`;
+    const cached = this.hoverColorCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const rgbColor = this.resolveColor(baseValue);
     if (!rgbColor) {
+      this.hoverColorCache.set(cacheKey, "");
       return "";
     }
 
     const hslColor = rgbToHsl(rgbColor.r, rgbColor.g, rgbColor.b);
     const hoverLightnessDelta = mode === "dark" ? 3.8 : 5;
     const hoverLightness = clamp(hslColor.l + hoverLightnessDelta, 0, 100);
-
-    return `hsl(${formatNumber(hslColor.h, 1)}, ${formatNumber(hslColor.s, 1)}%, ${formatNumber(hoverLightness, 1)}%)`;
+    const result = `hsl(${formatNumber(hslColor.h, 1)}, ${formatNumber(hslColor.s, 1)}%, ${formatNumber(hoverLightness, 1)}%)`;
+    this.hoverColorCache.set(cacheKey, result);
+    return result;
   }
 }

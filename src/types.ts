@@ -75,8 +75,7 @@ export interface BaseProfileOption<Key extends StringProfileKey = StringProfileK
   variableName: string;
 }
 
-export interface ColorOption<Key extends StringProfileKey = StringProfileKey>
-  extends BaseProfileOption<Key> {}
+export type ColorOption<Key extends StringProfileKey = StringProfileKey> = BaseProfileOption<Key>;
 
 export interface SliderOption<Key extends StringProfileKey = StringProfileKey>
   extends BaseProfileOption<Key> {

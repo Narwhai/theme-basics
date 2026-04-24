@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { debounce, normalizePath, Notice, Plugin, SettingTab } from "obsidian";
 
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, PROFILE_KEYS, PROFILE_LABELS } from "./constants";
 import { DefaultThemeStyleTunerSettingTab } from "./settings-tab";
@@ -11,32 +11,48 @@ import type {
   ProfileMode,
 } from "./types";
 
+/** Narrow extension of App for safely accessing the settings UI. */
+interface AppWithActiveSetting {
+  setting?: {
+    activeTab: SettingTab | null;
+  };
+}
+
 export default class DefaultThemeStyleTunerPlugin extends Plugin {
   settings!: DefaultThemeStyleTunerSettings;
   readonly styleManager = new StyleManager(this);
 
-  override async onload(): Promise<void> {
-    await this.loadSettings();
+  private readonly debouncedCssChange = debounce(() => {
     this.styleManager.refreshThemeDefaults();
     this.styleManager.applyStyles();
+    const activeTab = (this.app as AppWithActiveSetting).setting?.activeTab;
+    if (activeTab instanceof DefaultThemeStyleTunerSettingTab) {
+      activeTab.refreshDisplayPreserveScroll();
+    }
+  }, 50, false);
 
+  override async onload(): Promise<void> {
+    await this.loadSettings();
     this.addSettingTab(new DefaultThemeStyleTunerSettingTab(this.app, this));
     this.registerCommands();
 
     this.register(() => this.styleManager.cleanup());
+    this.register(() => this.debouncedCssChange.cancel());
+
+    this.app.workspace.onLayoutReady(() => {
+      this.styleManager.refreshThemeDefaults();
+      this.styleManager.applyStyles();
+    });
 
     this.registerEvent(
       this.app.workspace.on("css-change", () => {
-        this.styleManager.refreshThemeDefaults();
-        this.styleManager.applyStyles();
+        this.debouncedCssChange();
       })
     );
   }
 
   getThemeMode(): ProfileMode {
-    // Note: app.isDarkMode() is available since Obsidian 1.10.0 but the
-    // plugin currently targets 1.8.7.  Using DOM check for compatibility.
-    return document.body.classList.contains("theme-dark") ? "dark" : "light";
+    return this.app.isDarkMode() ? "dark" : "light";
   }
 
   getAppliedProfileMode(): ProfileMode {
@@ -165,8 +181,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
   async exportCssSnippet(): Promise<void> {
     const css = this.styleManager.generateSnippetCss();
-    const snippetsDir = `${this.app.vault.configDir}/snippets`;
-    const snippetPath = `${snippetsDir}/theme-basics.css`;
+    const snippetsDir = normalizePath(`${this.app.vault.configDir}/snippets`);
+    const snippetPath = normalizePath(`${snippetsDir}/theme-basics.css`);
     try {
       await this.app.vault.adapter.mkdir(snippetsDir);
     } catch {
@@ -309,7 +325,12 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       id: "import-settings-json",
       name: "Import settings from JSON",
       callback: () => {
-        this.importSettingsJson(() => { });
+        this.importSettingsJson(() => {
+          const activeTab = (this.app as AppWithActiveSetting).setting?.activeTab;
+          if (activeTab instanceof DefaultThemeStyleTunerSettingTab) {
+            activeTab.refreshDisplayPreserveScroll();
+          }
+        });
       },
     });
 
@@ -330,7 +351,11 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
           ? "light"
           : this.getThemeMode();
 
-    if (isObject(loaded) && isObject(loaded.profiles)) {
+    if (
+      isObject(loaded) &&
+      typeof loaded.version === "number" &&
+      isObject(loaded.profiles)
+    ) {
       return {
         version: 2,
         uiProfile: preferredProfile,
@@ -341,12 +366,24 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       };
     }
 
+    // Treat bare objects that contain profile keys as a legacy single profile.
+    if (isObject(loaded) && PROFILE_KEYS.some((k) => k in loaded)) {
+      return {
+        version: 2,
+        uiProfile: preferredProfile,
+        profiles: {
+          light: this.normalizeProfile(loaded),
+          dark: this.normalizeProfile(loaded),
+        },
+      };
+    }
+
     return {
       version: 2,
       uiProfile: preferredProfile,
       profiles: {
-        light: this.normalizeProfile(loaded),
-        dark: this.normalizeProfile(loaded),
+        light: this.normalizeProfile({}),
+        dark: this.normalizeProfile({}),
       },
     };
   }

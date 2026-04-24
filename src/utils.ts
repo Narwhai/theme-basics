@@ -1,19 +1,19 @@
 import type { DefaultThemeStyleTunerProfile, HslColor } from "./types";
 
-const BLOCKED_CSS_PATTERNS = /url\s*\(|expression\s*\(|@import|behavior\s*:|\\00/i;
+const BLOCKED_CSS_PATTERNS = /url\s*\(|expression\s*\(|@import|behavior\s*:|\\00/gi;
 
 export function sanitizeCssValue(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
 
-  const trimmed = value.trim().replace(/[;{}]/g, "");
+  const normalized = value.trim().replace(/\s+/g, " ").replace(/[;{}]/g, "");
 
-  if (BLOCKED_CSS_PATTERNS.test(trimmed)) {
+  if (BLOCKED_CSS_PATTERNS.test(normalized)) {
     return "";
   }
 
-  return trimmed;
+  return normalized;
 }
 
 export function cloneProfile(
