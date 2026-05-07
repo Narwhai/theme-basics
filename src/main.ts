@@ -145,7 +145,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     const json = JSON.stringify(this.settings, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
+    const anchor = activeDocument.createEl("a");
     anchor.href = url;
     anchor.download = "theme-basics-settings.json";
     anchor.click();
@@ -153,7 +153,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
   }
 
   importSettingsJson(onSuccess: () => void): void {
-    const input = document.createElement("input");
+    const input = activeDocument.createEl("input");
     input.type = "file";
     input.accept = ".json,application/json";
     input.onchange = async () => {

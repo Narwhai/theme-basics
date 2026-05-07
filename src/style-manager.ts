@@ -6,6 +6,8 @@ import { clamp, formatNumber, rgbToHsl, sanitizeCssValue } from "./utils";
 import type DefaultThemeStyleTunerPlugin from "./main";
 import type { ProfileMode, RgbColor, StringProfileKey } from "./types";
 
+const OFFSCREEN_CLASS = "theme-basics-offscreen";
+
 const CAPTURED_THEME_VARIABLE_NAMES = [
   ...CSS_VARIABLE_NAMES,
   "--tag-border-width",
@@ -19,6 +21,8 @@ const APPLIED_STYLE_VARIABLE_NAMES = [
 ] as const;
 
 export class StyleManager {
+  private appliedBody: HTMLElement | null = null;
+
   private themeDefaults: Record<ProfileMode, Record<string, string>> = {
     light: {},
     dark: {},
@@ -35,35 +39,64 @@ export class StyleManager {
 
   /** Debounced style application — coalesces rapid changes. */
   private debouncedApply = debounce(() => {
-    document.body.classList.add(BODY_CLASS);
-    this.clearCssVariables();
+    const body = this.getManagedBody();
+    body.classList.add(BODY_CLASS);
+    this.clearCssVariables(body);
     const appliedMode = this.plugin.getAppliedProfileMode();
-    document.body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
+    body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
   }, 16, true);
 
   constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
 
-  private getColorProbe(): HTMLDivElement {
-    if (!this.colorProbe) {
-      this.colorProbe = document.createElement("div");
-      this.colorProbe.setCssProps({
-        position: "absolute",
-        left: "-9999px",
-        top: "-9999px",
-        width: "0",
-        height: "0",
-        overflow: "hidden",
-        "pointer-events": "none",
-      });
-      document.body.append(this.colorProbe);
+  private getWorkspaceBody(): HTMLElement {
+    return this.plugin.app.workspace.containerEl.ownerDocument.body;
+  }
+
+  private getManagedBody(): HTMLElement {
+    const body = this.getWorkspaceBody();
+
+    if (this.appliedBody && this.appliedBody !== body) {
+      this.appliedBody.classList.remove(BODY_CLASS);
+      this.clearCssVariables(this.appliedBody);
     }
+
+    this.appliedBody = body;
+    return body;
+  }
+
+  private getDocumentWindow(doc: Document): Window {
+    const docWindow = doc.defaultView;
+    if (!docWindow) {
+      throw new Error("Document is not attached to a window.");
+    }
+
+    return docWindow;
+  }
+
+  private getColorProbe(): HTMLDivElement {
+    const body = this.getWorkspaceBody();
+
+    if (this.colorProbe && this.colorProbe.ownerDocument !== body.ownerDocument) {
+      this.colorProbe.remove();
+      this.colorProbe = null;
+    }
+
+    if (!this.colorProbe) {
+      this.colorProbe = body.createDiv({ cls: OFFSCREEN_CLASS });
+    }
+
     return this.colorProbe;
   }
 
   cleanup(): void {
     this.debouncedApply.cancel();
-    document.body.classList.remove(BODY_CLASS);
-    this.clearCssVariables();
+
+    if (this.appliedBody) {
+      this.appliedBody.classList.remove(BODY_CLASS);
+      this.clearCssVariables(this.appliedBody);
+      this.appliedBody = null;
+    }
+
     this.colorProbe?.remove();
     this.colorProbe = null;
   }
@@ -72,24 +105,25 @@ export class StyleManager {
     this.pickerHexCache.clear();
     this.hoverColorCache.clear();
 
-    const hadPluginClass = document.body.classList.contains(BODY_CLASS);
-    const previousInlineValues = this.captureInlineVariableValues(APPLIED_STYLE_VARIABLE_NAMES);
+    const body = this.getManagedBody();
+    const hadPluginClass = body.classList.contains(BODY_CLASS);
+    const previousInlineValues = this.captureInlineVariableValues(body, APPLIED_STYLE_VARIABLE_NAMES);
 
     if (hadPluginClass) {
-      document.body.classList.remove(BODY_CLASS);
+      body.classList.remove(BODY_CLASS);
     }
 
-    this.clearCssVariables();
+    this.clearCssVariables(body);
 
     this.themeDefaults = {
       light: this.captureThemeDefaultsForMode("light"),
       dark: this.captureThemeDefaultsForMode("dark"),
     };
 
-    this.restoreInlineVariableValues(previousInlineValues);
+    this.restoreInlineVariableValues(body, previousInlineValues);
 
     if (hadPluginClass) {
-      document.body.classList.add(BODY_CLASS);
+      body.classList.add(BODY_CLASS);
     }
   }
 
@@ -250,32 +284,23 @@ export class StyleManager {
     return lines.join("\n").trimEnd() + "\n";
   }
 
-  private clearCssVariables(): void {
+  private clearCssVariables(body: HTMLElement): void {
     // setCssProps can only set values; removing a custom property requires
     // removeProperty so that theme defaults are restored rather than overridden
     // with an empty string.
     for (const variableName of APPLIED_STYLE_VARIABLE_NAMES) {
-      document.body.style.removeProperty(variableName);
+      body.style.removeProperty(variableName);
     }
   }
 
   private captureThemeDefaultsForMode(mode: ProfileMode): Record<string, string> {
     // Use an offscreen element to avoid toggling classes on the live body,
     // which would force a full document style recalculation.
-    const offscreen = document.createElement("div");
-    offscreen.className = mode === "light" ? "theme-light" : "theme-dark";
-    offscreen.setCssProps({
-      position: "absolute",
-      left: "-9999px",
-      top: "-9999px",
-      width: "0",
-      height: "0",
-      overflow: "hidden",
-      "pointer-events": "none",
+    const offscreen = this.getWorkspaceBody().createDiv({
+      cls: [OFFSCREEN_CLASS, mode === "light" ? "theme-light" : "theme-dark"],
     });
-    document.body.append(offscreen);
 
-    const computedStyle = getComputedStyle(offscreen);
+    const computedStyle = this.getDocumentWindow(offscreen.ownerDocument).getComputedStyle(offscreen);
     const defaults = Object.fromEntries(
       CAPTURED_THEME_VARIABLE_NAMES.map((variableName) => [
         variableName,
@@ -287,22 +312,26 @@ export class StyleManager {
     return defaults;
   }
 
-  private captureInlineVariableValues(variableNames: readonly string[]): Record<string, string> {
+  private captureInlineVariableValues(
+    body: HTMLElement,
+    variableNames: readonly string[]
+  ): Record<string, string> {
     return Object.fromEntries(
-      variableNames.map((variableName) => [variableName, document.body.style.getPropertyValue(variableName)])
+      variableNames.map((variableName) => [variableName, body.style.getPropertyValue(variableName)])
     );
   }
 
-  private restoreInlineVariableValues(values: Record<string, string>): void {
+  private restoreInlineVariableValues(body: HTMLElement, values: Record<string, string>): void {
     const toSet: Record<string, string> = {};
     for (const [variableName, value] of Object.entries(values)) {
       if (value) {
         toSet[variableName] = value;
       } else {
-        document.body.style.removeProperty(variableName);
+        body.style.removeProperty(variableName);
       }
     }
-    document.body.setCssProps(toSet);
+
+    body.setCssProps(toSet);
   }
 
   private resolveColor(value: string): RgbColor | null {
@@ -313,7 +342,7 @@ export class StyleManager {
 
     const probe = this.getColorProbe();
     probe.setCssProps({ color: sanitizedValue });
-    const resolvedColor = getComputedStyle(probe).color;
+    const resolvedColor = this.getDocumentWindow(probe.ownerDocument).getComputedStyle(probe).color;
 
     const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
     if (!match) {

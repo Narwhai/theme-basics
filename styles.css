@@ -26,3 +26,13 @@
   font-size: var(--font-smaller);
   resize: vertical;
 }
+
+.theme-basics-offscreen {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
