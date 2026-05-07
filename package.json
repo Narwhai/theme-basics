@@ -1,7 +1,7 @@
 {
   "name": "theme-basics",
   "version": "1.0.0",
-  "description": "Customize the appearance of Obsidian without CSS snippets. Modify colors, text sizing/spacing, and more",
+  "description": "Appearance customization without CSS snippets. Modify colors, text sizing/spacing, and more.",
   "main": "main.js",
   "type": "module",
   "scripts": {

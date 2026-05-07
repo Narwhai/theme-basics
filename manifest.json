@@ -3,7 +3,7 @@
   "name": "Theme Basics",
   "version": "1.0.0",
   "minAppVersion": "1.10.0",
-  "description": "Customize the appearance of Obsidian without plugins. Modify colors, text sizing/spacing, and more",
+  "description": "Appearance customization without CSS snippets. Modify colors, text sizing/spacing, and more.",
   "author": "Roman Soriano",
   "isDesktopOnly": false
 }
