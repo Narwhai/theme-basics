@@ -220,8 +220,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       .addTextArea((textarea) => {
         textarea
           .setPlaceholder(
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
-            'scheme: "Theme Name"\nauthor: "Author Name"\nbase00: "f8f8f8"\nbase01: "e8e8e8"\n...'
+            'Paste the base16 YAML here.'
           )
           .setValue(this.base16Yaml)
           .onChange((value) => {

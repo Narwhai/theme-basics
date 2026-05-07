@@ -161,8 +161,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       if (!file) return;
       const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MB
       if (file.size > MAX_IMPORT_SIZE) {
-        // eslint-disable-next-line obsidianmd/ui/sentence-case
-        new Notice("Import failed: file exceeds 1 MB size limit.");
+        new Notice("Import failed: file exceeds 1mb size limit.");
         return;
       }
       try {
