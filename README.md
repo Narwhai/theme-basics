@@ -1,4 +1,4 @@
-# Basic Styling Tuner
+# Theme Basics
 
 A plugin that allows you to customize basic appearance properties such as background colors, text sizes, line spacing, and more without the need to write custom CSS snippets. 
 
@@ -6,9 +6,9 @@ A plugin that allows you to customize basic appearance properties such as backgr
 
 - Install the BRAT plugin from the Obsidian community plugins
 - In the BRAT plugin settings, click "Add beta plugin" in the "Beta plugin list" section
-- Paste the link to this repository in the Repositor input field
+- Paste the link to this repository in the Repository input field
 - Click "Add plugin"
-- Click "Community Plugins" in the left sidebar, find "Basic Styling Tuner" in the list and click "Enable"
+- Click "Community Plugins" in the left sidebar, find "Theme Basics" in the list and click "Enable"
 
 ## Available Settings
 
@@ -60,4 +60,4 @@ A plugin that allows you to customize basic appearance properties such as backgr
 ## Notes
 
 - Intended to work mainly with the default theme, if you are using a community theme, settings may not work as intended.
-- If you have custom CSS snippets, they also might interfere with the settings found in this plugin if they target the same properties. 
+- If you have custom CSS snippets, they also might interfere with the settings found in this plugin if they target the same properties.
