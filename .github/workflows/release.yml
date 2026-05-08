@@ -56,4 +56,4 @@ jobs:
           gh release create "${{ steps.vars.outputs.tag }}" \
             --title "${{ steps.vars.outputs.tag }}" \
             --generate-notes \
-            main.js manifest.json styles.css pinned-tab-utils.zip
+            main.js manifest.json styles.css
