@@ -13,15 +13,10 @@ const CAPTURED_THEME_VARIABLE_NAMES = [
   "--tag-border-width",
 ] as const;
 
-const APPLIED_STYLE_VARIABLE_NAMES = [
-  ...CAPTURED_THEME_VARIABLE_NAMES,
-  "--tag-color-hover",
-  "--tag-background-hover",
-  "--tag-border-color-hover",
-] as const;
-
 export class StyleManager {
   private appliedBody: HTMLElement | null = null;
+  private disposed = false;
+  private readonly previousInlineValues = new Map<string, { value: string; applied: string }>();
 
   private themeDefaults: Record<ProfileMode, Record<string, string>> = {
     light: {},
@@ -39,11 +34,21 @@ export class StyleManager {
 
   /** Debounced style application — coalesces rapid changes. */
   private debouncedApply = debounce(() => {
+    if (this.disposed) return;
     const body = this.getManagedBody();
     body.classList.add(BODY_CLASS);
-    this.clearCssVariables(body);
+    this.restoreOwnedCssVariables(body, true);
     const appliedMode = this.plugin.getAppliedProfileMode();
-    body.setCssProps(this.buildCssPropertiesForMode(appliedMode));
+    const props = this.buildCssPropertiesForMode(appliedMode);
+    for (const [name, applied] of Object.entries(props)) {
+      // Respect explicit inline !important declarations from other plugins.
+      if (body.style.getPropertyPriority(name)) {
+        delete props[name];
+        continue;
+      }
+      this.previousInlineValues.set(name, { value: body.style.getPropertyValue(name), applied });
+    }
+    body.setCssProps(props);
   }, 16, true);
 
   constructor(private readonly plugin: DefaultThemeStyleTunerPlugin) { }
@@ -57,7 +62,7 @@ export class StyleManager {
 
     if (this.appliedBody && this.appliedBody !== body) {
       this.appliedBody.classList.remove(BODY_CLASS);
-      this.clearCssVariables(this.appliedBody);
+      this.restoreOwnedCssVariables(this.appliedBody, true);
     }
 
     this.appliedBody = body;
@@ -89,11 +94,12 @@ export class StyleManager {
   }
 
   cleanup(): void {
+    this.disposed = true;
     this.debouncedApply.cancel();
 
     if (this.appliedBody) {
       this.appliedBody.classList.remove(BODY_CLASS);
-      this.clearCssVariables(this.appliedBody);
+      this.restoreOwnedCssVariables(this.appliedBody, true);
       this.appliedBody = null;
     }
 
@@ -102,28 +108,32 @@ export class StyleManager {
   }
 
   refreshThemeDefaults(): void {
+    if (this.disposed) return;
     this.pickerHexCache.clear();
     this.hoverColorCache.clear();
 
     const body = this.getManagedBody();
     const hadPluginClass = body.classList.contains(BODY_CLASS);
-    const previousInlineValues = this.captureInlineVariableValues(body, APPLIED_STYLE_VARIABLE_NAMES);
+    const ownedNames = [...this.previousInlineValues].filter(([name, { applied }]) =>
+      body.style.getPropertyValue(name) === applied && !body.style.getPropertyPriority(name)
+    ).map(([name]) => name);
+    const appliedValues = this.captureInlineVariableValues(body, ownedNames);
 
     if (hadPluginClass) {
       body.classList.remove(BODY_CLASS);
     }
 
-    this.clearCssVariables(body);
-
-    this.themeDefaults = {
-      light: this.captureThemeDefaultsForMode("light"),
-      dark: this.captureThemeDefaultsForMode("dark"),
-    };
-
-    this.restoreInlineVariableValues(body, previousInlineValues);
-
-    if (hadPluginClass) {
-      body.classList.add(BODY_CLASS);
+    this.restoreOwnedCssVariables(body, false);
+    try {
+      this.themeDefaults = {
+        light: this.captureThemeDefaultsForMode("light"),
+        dark: this.captureThemeDefaultsForMode("dark"),
+      };
+    } finally {
+      this.restoreInlineVariableValues(body, appliedValues);
+      if (hadPluginClass) {
+        body.classList.add(BODY_CLASS);
+      }
     }
   }
 
@@ -251,6 +261,9 @@ export class StyleManager {
   }
 
   applyStyles(): void {
+    if (this.disposed) return;
+    this.pickerHexCache.clear();
+    this.hoverColorCache.clear();
     this.debouncedApply();
   }
 
@@ -284,13 +297,17 @@ export class StyleManager {
     return lines.join("\n").trimEnd() + "\n";
   }
 
-  private clearCssVariables(body: HTMLElement): void {
-    // setCssProps can only set values; removing a custom property requires
-    // removeProperty so that theme defaults are restored rather than overridden
-    // with an empty string.
-    for (const variableName of APPLIED_STYLE_VARIABLE_NAMES) {
-      body.style.removeProperty(variableName);
+  private restoreOwnedCssVariables(body: HTMLElement, release: boolean): void {
+    for (const [name, { value, applied }] of this.previousInlineValues) {
+      // Do not overwrite a newer inline value installed by another plugin.
+      if (body.style.getPropertyValue(name) !== applied || body.style.getPropertyPriority(name)) continue;
+      if (value) {
+        body.setCssProps({ [name]: value });
+      } else {
+        body.style.removeProperty(name);
+      }
     }
+    if (release) this.previousInlineValues.clear();
   }
 
   private captureThemeDefaultsForMode(mode: ProfileMode): Record<string, string> {
@@ -300,16 +317,17 @@ export class StyleManager {
       cls: [OFFSCREEN_CLASS, mode === "light" ? "theme-light" : "theme-dark"],
     });
 
-    const computedStyle = this.getDocumentWindow(offscreen.ownerDocument).getComputedStyle(offscreen);
-    const defaults = Object.fromEntries(
-      CAPTURED_THEME_VARIABLE_NAMES.map((variableName) => [
-        variableName,
-        computedStyle.getPropertyValue(variableName).trim(),
-      ])
-    );
-
-    offscreen.remove();
-    return defaults;
+    try {
+      const computedStyle = this.getDocumentWindow(offscreen.ownerDocument).getComputedStyle(offscreen);
+      return Object.fromEntries(
+        CAPTURED_THEME_VARIABLE_NAMES.map((variableName) => [
+          variableName,
+          computedStyle.getPropertyValue(variableName).trim(),
+        ])
+      );
+    } finally {
+      offscreen.remove();
+    }
   }
 
   private captureInlineVariableValues(
@@ -335,6 +353,7 @@ export class StyleManager {
   }
 
   private resolveColor(value: string): RgbColor | null {
+    if (this.disposed) return null;
     const sanitizedValue = sanitizeCssValue(value);
     if (!sanitizedValue || !CSS.supports("color", sanitizedValue)) {
       return null;
@@ -342,18 +361,33 @@ export class StyleManager {
 
     const probe = this.getColorProbe();
     probe.setCssProps({ color: sanitizedValue });
-    const resolvedColor = this.getDocumentWindow(probe.ownerDocument).getComputedStyle(probe).color;
+    const docWindow = this.getDocumentWindow(probe.ownerDocument);
+    const resolvedColor = docWindow.getComputedStyle(probe).color;
+    const legacyMatch = resolvedColor.match(/^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/i);
 
-    const match = resolvedColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+    // Chromium preserves modern color spaces in computed styles (Obsidian 1.13+
+    // uses OKLCH/color-mix). Let its color engine convert to sRGB instead of
+    // assuming every computed color serializes as rgb(). Mixing a color with
+    // itself preserves alpha without canvas pixel-readback quantization.
+    if (!legacyMatch) {
+      const srgbValue = `color-mix(in srgb, ${resolvedColor}, ${resolvedColor})`;
+      if (!CSS.supports("color", srgbValue)) return null;
+      probe.setCssProps({ color: srgbValue });
+    }
+    const match = legacyMatch ?? docWindow.getComputedStyle(probe).color.match(
+      /^color\(srgb\s+([-\d.e+]+)\s+([-\d.e+]+)\s+([-\d.e+]+)(?:\s*\/\s*([-\d.e+]+))?\)$/i
+    );
     if (!match) {
       return null;
     }
-
+    const scale = legacyMatch ? 1 : 255;
+    const channels = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] ?? 1)];
+    if (!channels.every(Number.isFinite)) return null;
     return {
-      r: Number(match[1]),
-      g: Number(match[2]),
-      b: Number(match[3]),
-      a: match[4] ? Number(match[4]) : 1,
+      r: Math.round(clamp(Number(match[1]) * scale, 0, 255)),
+      g: Math.round(clamp(Number(match[2]) * scale, 0, 255)),
+      b: Math.round(clamp(Number(match[3]) * scale, 0, 255)),
+      a: clamp(Number(match[4] ?? 1), 0, 1),
     };
   }
 
@@ -373,7 +407,7 @@ export class StyleManager {
     const hslColor = rgbToHsl(rgbColor.r, rgbColor.g, rgbColor.b);
     const hoverLightnessDelta = mode === "dark" ? 3.8 : 5;
     const hoverLightness = clamp(hslColor.l + hoverLightnessDelta, 0, 100);
-    const result = `hsl(${formatNumber(hslColor.h, 1)}, ${formatNumber(hslColor.s, 1)}%, ${formatNumber(hoverLightness, 1)}%)`;
+    const result = `hsla(${formatNumber(hslColor.h, 1)}, ${formatNumber(hslColor.s, 1)}%, ${formatNumber(hoverLightness, 1)}%, ${formatNumber(rgbColor.a)})`;
     this.hoverColorCache.set(cacheKey, result);
     return result;
   }

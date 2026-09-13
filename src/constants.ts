@@ -215,7 +215,7 @@ export const COLOR_OPTIONS: ColorOption[] = [
   {
     key: "highlightBackground",
     name: "Highlight background",
-    description: "Color behind ==highlighted== text. Use the text field for rgba() or alpha values.",
+    description: "Color behind ==highlighted== text. Imported colors can include alpha values.",
     variableName: CSS_VARIABLES.highlightBackground,
   },
 ];

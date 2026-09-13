@@ -61,3 +61,21 @@ A plugin that allows you to customize basic appearance properties such as backgr
 
 - Intended to work mainly with the default theme, if you are using a community theme, settings may not work as intended.
 - If you have custom CSS snippets, they also might interfere with the settings found in this plugin if they target the same properties.
+
+## Color compatibility
+
+- Obsidian 1.13 introduced OKLCH base colors and deprecated legacy RGB/HSL helper variables. Theme Basics resolves modern CSS colors, including `oklch()` and `color-mix()`, for its pickers while preserving the original override values in settings and exported snippets.
+- Color overrides take complete CSS colors such as `#ff0000`, `rgb(255, 0, 0)`, or `oklch(60% 0.2 30)`, not bare `255, 0, 0` triplets. The breaking change from triplets to complete colors specifically affects `--callout-color`, which this plugin does not override; legacy `*-rgb` helper variables have not changed into complete colors.
+- See the [Obsidian 1.13 release notes](https://obsidian.md/changelog/2026-07-30-desktop-v1.13.4/) and [color-variable reference](https://docs.obsidian.md/Reference/CSS%20variables/Foundations/Colors).
+
+## Development checks
+
+```sh
+npm test
+npm run lint
+npm run build
+# Requires the Obsidian CLI and the named vault to be open.
+OBSIDIAN_TEST_VAULT=Dev-Vault npm run test:obsidian
+```
+
+Renderer tests use temporary offscreen elements and in-memory plugin instances; they do not change saved settings or reload the installed plugin.

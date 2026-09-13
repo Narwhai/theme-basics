@@ -1,6 +1,6 @@
 import type { DefaultThemeStyleTunerProfile, HslColor } from "./types";
 
-const BLOCKED_CSS_PATTERNS = /url\s*\(|expression\s*\(|@import|behavior\s*:|\\00/gi;
+const BLOCKED_CSS_PATTERNS = /url\s*\(|expression\s*\(|@import|behavior\s*:|\\00/i;
 
 export function sanitizeCssValue(value: unknown): string {
   if (typeof value !== "string") {

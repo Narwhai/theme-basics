@@ -1,4 +1,4 @@
-import { debounce, normalizePath, Notice, Plugin, SettingTab } from "obsidian";
+import { debounce, normalizePath, Notice, Plugin } from "obsidian";
 
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, PROFILE_KEYS, PROFILE_LABELS } from "./constants";
 import { DefaultThemeStyleTunerSettingTab } from "./settings-tab";
@@ -11,29 +11,22 @@ import type {
   ProfileMode,
 } from "./types";
 
-/** Narrow extension of App for safely accessing the settings UI. */
-interface AppWithActiveSetting {
-  setting?: {
-    activeTab: SettingTab | null;
-  };
-}
-
 export default class DefaultThemeStyleTunerPlugin extends Plugin {
   override settings!: DefaultThemeStyleTunerSettings;
   readonly styleManager = new StyleManager(this);
+  private settingsTab: DefaultThemeStyleTunerSettingTab | null = null;
 
   private readonly debouncedCssChange = debounce(() => {
     this.styleManager.refreshThemeDefaults();
     this.styleManager.applyStyles();
-    const activeTab = (this.app as AppWithActiveSetting).setting?.activeTab;
-    if (activeTab instanceof DefaultThemeStyleTunerSettingTab) {
-      activeTab.refreshDisplayPreserveScroll();
-    }
+    this.settingsTab?.refreshDisplayPreserveScroll();
   }, 50, false);
 
   override async onload(): Promise<void> {
     await this.loadSettings();
-    this.addSettingTab(new DefaultThemeStyleTunerSettingTab(this.app, this));
+    this.settingsTab = new DefaultThemeStyleTunerSettingTab(this.app, this);
+    this.addSettingTab(this.settingsTab);
+    this.register(() => { this.settingsTab = null; });
     this.registerCommands();
 
     this.register(() => this.styleManager.cleanup());
@@ -152,7 +145,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     URL.revokeObjectURL(url);
   }
 
-  importSettingsJson(onSuccess: () => void): void {
+  importSettingsJson(): void {
     const input = activeDocument.createEl("input");
     input.type = "file";
     input.accept = ".json,application/json";
@@ -165,17 +158,25 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
         return;
       }
       try {
-        const text = await file.text();
-        const parsed: unknown = JSON.parse(text);
-        this.settings = this.normalizeSettings(parsed);
-        await this.saveSettings();
+        await this.importSettings(await file.text());
         new Notice("Settings imported successfully.");
-        onSuccess();
-      } catch {
-        new Notice("Failed to import settings: the file is not valid JSON.");
+      } catch (error) {
+        new Notice(`Failed to import settings: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
     input.click();
+  }
+
+  async importSettings(json: string): Promise<void> {
+    const parsed: unknown = JSON.parse(json);
+    this.validateSettingsImport(parsed);
+    const settings = this.normalizeSettings(parsed);
+    // Do not replace the current profiles until validation and persistence succeed.
+    await this.saveData(settings);
+    this.settings = settings;
+    this.styleManager.applyStyles();
+    // Definitions are cached even while the settings tab is closed (1.13+).
+    this.settingsTab?.refreshDisplayPreserveScroll();
   }
 
   async exportCssSnippet(): Promise<void> {
@@ -209,10 +210,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       return { success: false, count: 0 };
     }
 
-    const profile = this.getProfile(mode) as Record<
-      keyof DefaultThemeStyleTunerProfile,
-      string
-    >;
+    const profile = this.getProfile(mode);
 
     const apply = (key: keyof DefaultThemeStyleTunerProfile, hex: string | undefined): void => {
       if (!hex) return;
@@ -285,9 +283,11 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     for (const line of input.split("\n")) {
       const match = line
         .trim()
-        .match(/^(base[0-9A-Fa-f]{2})\s*:\s*["']?([0-9A-Fa-f]{6})["']?/i);
-      if (match) {
-        colors[match[1]!.toLowerCase()] = "#" + match[2]!.toLowerCase();
+        .match(/^(base0[0-9a-f])\s*:\s*(?:"(#?[0-9a-f]{6})"|'(#?[0-9a-f]{6})'|([0-9a-f]{6}))\s*(?:#.*)?$/i);
+      const key = match?.[1];
+      const hex = match?.[2] ?? match?.[3] ?? match?.[4];
+      if (key && hex) {
+        colors[key.toLowerCase()] = "#" + hex.replace(/^#/, "").toLowerCase();
       }
     }
     return colors;
@@ -324,12 +324,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       id: "import-settings-json",
       name: "Import settings from JSON",
       callback: () => {
-        this.importSettingsJson(() => {
-          const activeTab = (this.app as AppWithActiveSetting).setting?.activeTab;
-          if (activeTab instanceof DefaultThemeStyleTunerSettingTab) {
-            activeTab.refreshDisplayPreserveScroll();
-          }
-        });
+        this.importSettingsJson();
       },
     });
 
@@ -340,6 +335,35 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
         await this.exportCssSnippet();
       },
     });
+  }
+
+  private validateSettingsImport(loaded: unknown): void {
+    if (!isObject(loaded)) {
+      throw new Error("Expected a settings object.");
+    }
+    const validateProfile = (profile: unknown): void => {
+      if (!isObject(profile) || PROFILE_KEYS.some((key) => key in profile && typeof profile[key] !== "string")) {
+        throw new Error("Profiles must be objects containing string values.");
+      }
+      if (Object.keys(profile).length > 0 && !PROFILE_KEYS.some((key) => key in profile)) {
+        throw new Error("No recognized profile settings found.");
+      }
+    };
+    if ("version" in loaded || "profiles" in loaded) {
+      if (loaded.version !== DEFAULT_SETTINGS.version || !isObject(loaded.profiles)) {
+        throw new Error("Unsupported settings version or missing profiles.");
+      }
+      if (loaded.uiProfile !== "light" && loaded.uiProfile !== "dark") {
+        throw new Error("The profile to edit must be light or dark.");
+      }
+      validateProfile(loaded.profiles.light);
+      validateProfile(loaded.profiles.dark);
+      return;
+    }
+    if (!PROFILE_KEYS.some((key) => key in loaded)) {
+      throw new Error("No recognized profile settings found.");
+    }
+    validateProfile(loaded);
   }
 
   private normalizeSettings(loaded: unknown): DefaultThemeStyleTunerSettings {

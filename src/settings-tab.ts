@@ -30,22 +30,20 @@ import type { SettingDefinitionItem, SettingGroupItem } from "obsidian";
 import type { ColorOption, HeadingLevel, ProfileMode, SliderOption } from "./types";
 
 /**
- * A unique token minted every time {@link DefaultThemeStyleTunerSettingTab.display}
- * runs.  Each async handler captures the token that was current when it was
+ * A unique token minted whenever the tab's rows or definitions are rebuilt.
+ * Each async handler captures the token that was current when it was
  * created.  Before touching the UI the handler compares its token with the
  * live one – if they differ, the settings tab has been re-rendered since the
  * handler was created and the handler should bail out instead of operating on
  * stale DOM.
  *
- * On Obsidian 1.13+ display() is bypassed, so the token never changes and the
- * staleness checks always pass; row teardown is handled by the declarative
- * renderer instead.
+ * On Obsidian 1.13+ the token is replaced when definitions are rebuilt instead.
  */
 type DisplayToken = symbol;
 
 export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   /**
-   * The current display token.  Replaced on every {@link display} call.
+   * The current display token. Replaced on display() or definition rebuilds.
    * Handlers compare their captured token against this to detect staleness.
    */
   private displayToken: DisplayToken = Symbol();
@@ -68,6 +66,12 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   }
 
   refreshDisplayPreserveScroll(): void {
+    if (!this.containerEl.isShown()) {
+      // Hidden declarative tabs still need fresh definitions for reopening/search.
+      // eslint-disable-next-line obsidianmd/no-unsupported-api -- runtime-guarded for pre-1.13 support
+      if (typeof this.update === "function") this.update();
+      return;
+    }
     const containers = [this.containerEl, this.containerEl.parentElement].filter(
       (element): element is HTMLElement => element instanceof HTMLElement
     );
@@ -106,7 +110,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
    * drawn.
    */
   override getSettingDefinitions(): SettingDefinitionItem[] {
-    const token = this.displayToken;
+    const token: DisplayToken = Symbol();
+    this.displayToken = token;
     const editedMode = this.plugin.getEditedProfileMode();
     const otherMode = editedMode === "light" ? "dark" : "light";
 
@@ -584,7 +589,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         .setValue(editedMode)
         .onChange(async (value) => {
           if (this.isStale(token)) return;
-          if ((value !== "light" && value !== "dark") || value === editedMode) {
+          if ((value !== "light" && value !== "dark") || value === this.plugin.getEditedProfileMode()) {
             return;
           }
 
@@ -650,9 +655,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         .setButtonText("Import JSON")
         .setIcon("lucide-upload")
         .onClick(() => {
-          this.plugin.importSettingsJson(() => {
-            this.refreshDisplayPreserveScroll();
-          });
+          this.plugin.importSettingsJson();
         })
     );
   }
