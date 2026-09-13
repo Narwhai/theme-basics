@@ -19,7 +19,7 @@ interface AppWithActiveSetting {
 }
 
 export default class DefaultThemeStyleTunerPlugin extends Plugin {
-  settings!: DefaultThemeStyleTunerSettings;
+  override settings!: DefaultThemeStyleTunerSettings;
   readonly styleManager = new StyleManager(this);
 
   private readonly debouncedCssChange = debounce(() => {
