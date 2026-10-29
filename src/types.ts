@@ -62,6 +62,8 @@ export interface DefaultThemeStyleTunerSettings {
   version: number;
   uiProfile: ProfileMode;
   profiles: Record<ProfileMode, DefaultThemeStyleTunerProfile>;
+  palettes: Record<ProfileMode, string[]>;
+  colorAssignments: Record<ProfileMode, Partial<Record<StringProfileKey, number>>>;
 }
 
 export type StringProfileKey = {

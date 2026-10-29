@@ -75,7 +75,9 @@ export const DEFAULT_PROFILE: DefaultThemeStyleTunerProfile = {
 };
 
 export const DEFAULT_SETTINGS: DefaultThemeStyleTunerSettings = {
-  version: 2,
+  version: 3,
+  palettes: { light: Array<string>(16).fill(""), dark: Array<string>(16).fill("") },
+  colorAssignments: { light: {}, dark: {} },
   uiProfile: "light",
   profiles: {
     light: { ...DEFAULT_PROFILE },
@@ -396,6 +398,23 @@ export const ADVANCED_TAG_OPTIONS: ColorOption[] = [
 export const COLOR_OPTIONS_BY_KEY = Object.fromEntries(
   COLOR_OPTIONS.map((option) => [option.key, option])
 ) as Partial<Record<StringProfileKey, ColorOption>>;
+
+// Only color settings may refer to palette slots; numeric settings remain literal.
+export const COLOR_PROFILE_KEYS: readonly StringProfileKey[] = [
+  ...COLOR_OPTIONS.map((option) => option.key),
+  ...TYPOGRAPHY_COLOR_OPTIONS.map((option) => option.key),
+  ...ADVANCED_LIST_COLOR_OPTIONS.map((option) => option.key),
+  ...ADVANCED_BLOCKQUOTE_OPTIONS.map((option) => option.key),
+  ...ADVANCED_CODE_COLOR_OPTIONS.map((option) => option.key),
+  ...ADVANCED_TAG_OPTIONS.map((option) => option.key),
+  "h1Color", "h2Color", "h3Color", "h4Color", "h5Color", "h6Color",
+];
+
+export const PALETTE_SIZE = 16;
+
+export function isColorProfileKey(key: string): key is StringProfileKey {
+  return COLOR_PROFILE_KEYS.some((colorKey) => colorKey === key);
+}
 
 export const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3, 4, 5, 6];
 

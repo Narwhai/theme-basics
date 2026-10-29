@@ -33,6 +33,16 @@ export function createHarness(bundle) {
       run.cancel = () => { pending.delete(key); };
       return run;
     },
+    Notice: class {},
+    SuggestModal: class {
+      static latest;
+      constructor() { api.SuggestModal.latest = this; this.inputEl = { setAttribute() {} }; }
+      setTitle() { return this; }
+      setPlaceholder() {}
+      open() {}
+      close() { this.onClose(); }
+      onClose() {}
+    },
     Plugin: class {
       constructor(app) { this.app = app; }
     },
@@ -57,6 +67,7 @@ export function createHarness(bundle) {
   new Function("require", "module", "exports", bundle)(require, module, module.exports);
   return {
     ...module.exports,
+    SuggestModal: api.SuggestModal,
     flush() {
       for (const [key, callback] of [...pending]) {
         pending.delete(key);

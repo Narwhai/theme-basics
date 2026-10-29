@@ -7,6 +7,7 @@ import {
   PluginSettingTab,
   Setting,
   SliderComponent,
+  SuggestModal,
 } from "obsidian";
 
 import {
@@ -19,37 +20,94 @@ import {
   COLOR_OPTIONS_BY_KEY,
   HEADING_DEFAULTS,
   HEADING_LEVELS,
+  PALETTE_SIZE,
   PROFILE_LABELS,
   TYPOGRAPHY_COLOR_OPTIONS,
   TYPOGRAPHY_OPTIONS,
 } from "./constants";
-import { formatNumber } from "./utils";
+import { formatNumber, sanitizeCssValue } from "./utils";
 
 import type DefaultThemeStyleTunerPlugin from "./main";
 import type { SettingDefinitionItem, SettingGroupItem } from "obsidian";
 import type { ColorOption, HeadingLevel, ProfileMode, SliderOption } from "./types";
 
+interface PaletteChoice {
+  value: string;
+  label: string;
+  color: string;
+  selected: boolean;
+}
+
+/** The standard suggestion modal supplies keyboard navigation and focus management. */
+class PaletteChoiceModal extends SuggestModal<PaletteChoice> {
+  constructor(
+    app: App,
+    description: string,
+    private readonly choices: PaletteChoice[],
+    private readonly choose: (choice: PaletteChoice) => void,
+    private readonly closed: (modal: PaletteChoiceModal) => void
+  ) {
+    super(app);
+    this.setTitle(description);
+    this.setPlaceholder("Filter palette colors");
+    this.inputEl.setAttribute("aria-label", "Filter palette colors");
+  }
+
+  override getSuggestions(query: string): PaletteChoice[] {
+    const needle = query.trim().toLowerCase();
+    return this.choices.filter((choice) => choice.label.toLowerCase().includes(needle));
+  }
+
+  override renderSuggestion(choice: PaletteChoice, element: HTMLElement): void {
+    element.addClass("theme-basics-color-suggestion");
+    addColorSwatch(element, choice.color);
+    element.createSpan({ text: choice.label });
+    if (choice.selected) element.createSpan({ cls: "theme-basics-color-current", text: " Current" });
+  }
+
+  override onChooseSuggestion(choice: PaletteChoice): void {
+    this.choose(choice);
+  }
+
+  override onClose(): void {
+    super.onClose();
+    this.closed(this);
+  }
+}
+
+function addColorSwatch(container: HTMLElement, color: string): void {
+  const swatch = container.createSpan({ cls: "theme-basics-color-swatch" });
+  swatch.setAttribute("aria-hidden", "true");
+  const safeColor = sanitizeCssValue(color);
+  if (safeColor) {
+    swatch.setCssProps({ "--theme-basics-swatch-color": safeColor });
+  } else {
+    swatch.addClass("is-unset");
+  }
+}
+
 /**
- * A unique token minted whenever the tab's rows or definitions are rebuilt.
- * Each async handler captures the token that was current when it was
- * created.  Before touching the UI the handler compares its token with the
- * live one – if they differ, the settings tab has been re-rendered since the
- * handler was created and the handler should bail out instead of operating on
- * stale DOM.
- *
- * On Obsidian 1.13+ the token is replaced when definitions are rebuilt instead.
+ * A display token is replaced when the tab is rebuilt. Declarative rows get
+ * child tokens that are also invalidated when the native page tears them down,
+ * even when the parent tab's definitions haven't changed.
  */
-type DisplayToken = symbol;
+interface DisplayToken {
+  active: boolean;
+  parent?: DisplayToken;
+}
 
 export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   /**
    * The current display token. Replaced on display() or definition rebuilds.
    * Handlers compare their captured token against this to detect staleness.
    */
-  private displayToken: DisplayToken = Symbol();
+  private displayToken: DisplayToken = { active: true };
 
   /** Cached Base16 YAML text – lives on the instance so it survives re-renders. */
   private base16Yaml = "";
+  private activeColorModal: PaletteChoiceModal | null = null;
+  private colorControlRefreshers = new Set<() => void>();
+  private legacyPalettePage = false;
 
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
     super(app, plugin);
@@ -58,9 +116,16 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     this.containerEl.addClass("theme-basics-settings");
   }
 
+  dispose(): void {
+    this.clearColorControls();
+    this.displayToken = { active: true };
+  }
+
   override hide(): void {
     // On 1.13+ the base class tears down declaratively rendered rows; on
     // older versions hide() does nothing, so empty the container ourselves.
+    this.dispose();
+    this.legacyPalettePage = false;
     super.hide();
     this.containerEl.empty();
   }
@@ -110,7 +175,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
    * drawn.
    */
   override getSettingDefinitions(): SettingDefinitionItem[] {
-    const token: DisplayToken = Symbol();
+    this.clearColorControls();
+    const token: DisplayToken = { active: true };
     this.displayToken = token;
     const editedMode = this.plugin.getEditedProfileMode();
     const otherMode = editedMode === "light" ? "dark" : "light";
@@ -136,30 +202,37 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       {
         name: "Profile to edit",
         desc: "Choose whether you are editing the light or dark profile.",
-        render: (setting) => {
-          this.configureProfileRow(setting, editedMode, token);
-        },
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureProfileRow(setting, editedMode, rowToken);
+        }),
       },
       {
         name: "Copy edited profile",
         desc: `Copy all ${PROFILE_LABELS[editedMode]} values into the ${PROFILE_LABELS[otherMode]} profile.`,
-        render: (setting) => {
-          this.configureCopyProfileRow(setting, editedMode, token);
-        },
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureCopyProfileRow(setting, editedMode, rowToken);
+        }),
       },
       {
         name: `Reset ${PROFILE_LABELS[editedMode]} profile`,
         desc: `Clear every override in the ${PROFILE_LABELS[editedMode]} profile.`,
-        render: (setting) => {
-          this.configureResetProfileRow(setting, editedMode, token);
-        },
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureResetProfileRow(setting, editedMode, rowToken);
+        }),
       },
       {
         name: "Reset both profiles",
         desc: "Clear every override in both light and dark profiles.",
-        render: (setting) => {
-          this.configureResetAllRow(setting, token);
-        },
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureResetAllRow(setting, rowToken);
+        }),
+      },
+
+      {
+        type: "page",
+        name: "Color palette",
+        desc: "Edit the palette and import a Base16 theme.",
+        items: this.palettePageDefinitions(editedMode, token),
       },
 
       // ── Import / Export ─────────────────────────────────────────────
@@ -167,53 +240,27 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         {
           name: "Export settings",
           desc: "Download your current settings as a JSON file that can be imported later or shared with others.",
-          render: (setting) => {
-            this.configureExportJsonRow(setting);
-          },
+          render: this.renderRow(token, (setting, rowToken) => {
+            this.configureExportJsonRow(setting, rowToken);
+          }),
         },
         {
           name: "Import settings",
           desc: "Load settings from a previously exported JSON file. This will overwrite your current settings.",
-          render: (setting) => {
-            this.configureImportJsonRow(setting);
-          },
+          render: this.renderRow(token, (setting, rowToken) => {
+            this.configureImportJsonRow(setting, rowToken);
+          }),
         },
         {
           name: "Export as CSS snippet",
           desc:
             `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
             "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
-          render: (setting) => {
-            this.configureExportSnippetRow(setting);
-          },
+          render: this.renderRow(token, (setting, rowToken) => {
+            this.configureExportSnippetRow(setting, rowToken);
+          }),
         },
       ]),
-
-      // ── Base16 import ───────────────────────────────────────────────
-      this.sectionGroup(
-        "Import Base16 theme",
-        `Seed the ${PROFILE_LABELS[editedMode]} profile from a Base16 YAML color scheme. ` +
-        "The 16 base colors are mapped to backgrounds, text, links, headings, and more. " +
-        "Results are approximate — treat this as a starting point and fine-tune individual values afterwards.",
-        [
-          {
-            name: "Base16 YAML",
-            desc:
-              "Paste the full text of a Base16 .yaml file below. " +
-              "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored.",
-            render: (setting) => {
-              this.configureBase16TextareaRow(setting);
-            },
-          },
-          {
-            name: `Apply Base16 theme to ${PROFILE_LABELS[editedMode]}`,
-            searchable: false,
-            render: (setting) => {
-              this.configureBase16ApplyRow(setting, editedMode, token);
-            },
-          },
-        ]
-      ),
 
       // ── Style settings ──────────────────────────────────────────────
       this.sectionGroup("Backgrounds", "App chrome, note surfaces, and editor background colors.",
@@ -252,7 +299,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   override display(): void {
     // Mint a fresh token – any handler from a previous display() is now stale.
-    const token: DisplayToken = Symbol();
+    this.clearColorControls();
+    const token: DisplayToken = { active: true };
     this.displayToken = token;
 
     const { containerEl } = this;
@@ -261,6 +309,11 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
     containerEl.empty();
     containerEl.addClass("theme-basics-settings");
+
+    if (this.legacyPalettePage) {
+      this.displayLegacyPalettePage(containerEl, editedMode, token);
+      return;
+    }
 
     // ── Profile controls ──────────────────────────────────────────────
     this.addRow(
@@ -291,6 +344,12 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       (setting) => this.configureResetAllRow(setting, token)
     );
 
+    this.addRow(containerEl, "Color palette", "Edit the palette and import a Base16 theme.", (setting) => {
+      setting.addButton((button) => button.setButtonText("Open").setIcon("lucide-chevron-right").onClick(() => {
+        this.navigateLegacyPalettePage(true, token);
+      }));
+    });
+
     // ── Import / Export ──────────────────────────────────────────────────
     const ioSection = this.createSection(
       containerEl,
@@ -302,14 +361,14 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       ioSection,
       "Export settings",
       "Download your current settings as a JSON file that can be imported later or shared with others.",
-      (setting) => this.configureExportJsonRow(setting)
+      (setting) => this.configureExportJsonRow(setting, token)
     );
 
     this.addRow(
       ioSection,
       "Import settings",
       "Load settings from a previously exported JSON file. This will overwrite your current settings.",
-      (setting) => this.configureImportJsonRow(setting)
+      (setting) => this.configureImportJsonRow(setting, token)
     );
 
     this.addRow(
@@ -317,27 +376,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       "Export as CSS snippet",
       `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
       "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
-      (setting) => this.configureExportSnippetRow(setting)
+      (setting) => this.configureExportSnippetRow(setting, token)
     );
-
-    // ── Base16 import ──────────────────────────────────────────────────
-    const base16Section = this.createSection(
-      containerEl,
-      "Import Base16 theme",
-      `Seed the ${PROFILE_LABELS[editedMode]} profile from a Base16 YAML color scheme. ` +
-      "The 16 base colors are mapped to backgrounds, text, links, headings, and more. " +
-      "Results are approximate — treat this as a starting point and fine-tune individual values afterwards."
-    );
-
-    this.addRow(
-      base16Section,
-      "Base16 YAML",
-      "Paste the full text of a Base16 .yaml file below. " +
-      "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored.",
-      (setting) => this.configureBase16TextareaRow(setting)
-    );
-
-    this.configureBase16ApplyRow(new Setting(base16Section), editedMode, token);
 
     // ── Style settings ────────────────────────────────────────────────
     const backgroundsSection = this.createSection(
@@ -434,13 +474,71 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     }
   }
 
+  private navigateLegacyPalettePage(open: boolean, token: DisplayToken): void {
+    if (this.isStale(token)) return;
+    this.legacyPalettePage = open;
+    this.rerender();
+    this.containerEl.scrollTop = 0;
+  }
+
+  private displayLegacyPalettePage(containerEl: HTMLElement, mode: ProfileMode, token: DisplayToken): void {
+    this.addRow(containerEl, "Back to settings", "Return to the main Theme Basics settings.", (setting) => {
+      setting.addButton((button) => button.setButtonText("Back").setIcon("lucide-arrow-left").onClick(() => {
+        this.navigateLegacyPalettePage(false, token);
+      }));
+    });
+    new Setting(containerEl).setName("Color palette").setHeading();
+    this.addRow(containerEl, "Profile to edit", "Choose whether you are editing the light or dark profile.",
+      (setting) => this.configureProfileRow(setting, mode, token));
+    const paletteSection = this.createSection(containerEl, "Colors", this.paletteDescription(mode));
+    for (let index = 0; index < PALETTE_SIZE; index++) {
+      this.addRow(paletteSection, `Color ${index + 1}`, this.paletteSlotDescription(mode, index),
+        (setting) => this.configurePaletteSetting(setting, mode, index, token));
+    }
+    const base16Section = this.createSection(containerEl, "Import Base16 theme", this.base16Description(mode));
+    this.addRow(base16Section, "Base16 YAML",
+      "Paste the full text of a Base16 .yaml file below. " +
+      "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored.",
+      (setting) => this.configureBase16TextareaRow(setting, token));
+    this.configureBase16ApplyRow(new Setting(base16Section), mode, token);
+  }
+
+  private clearColorControls(): void {
+    this.activeColorModal?.close();
+    this.activeColorModal = null;
+    this.colorControlRefreshers.clear();
+  }
+
+  private refreshColorControls(): void {
+    for (const refresh of this.colorControlRefreshers) refresh();
+  }
+
   /**
-   * Returns `true` when the given token no longer matches the live
-   * {@link displayToken}, meaning the settings tab has been re-rendered and
-   * any DOM references captured by the caller are stale.
+   * Returns `true` when the tab has been rebuilt or a declarative row has
+   * been torn down, so its handlers must not use stale DOM references.
    */
   private isStale(token: DisplayToken): boolean {
-    return token !== this.displayToken;
+    let current = token;
+    while (current.parent) {
+      if (!current.active) return true;
+      current = current.parent;
+    }
+    return !current.active || current !== this.displayToken;
+  }
+
+  /** Declarative pages may tear down rows without rebuilding the tab's definitions. */
+  private renderRow(
+    token: DisplayToken,
+    configure: (setting: Setting, rowToken: DisplayToken) => void | (() => void)
+  ): (setting: Setting) => () => void {
+    return (setting) => {
+      const rowToken: DisplayToken = { active: true, parent: token };
+      const cleanup = configure(setting, rowToken);
+      return () => {
+        rowToken.active = false;
+        cleanup?.();
+      };
+    };
   }
 
   /**
@@ -502,13 +600,96 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
   }
 
+  private palettePageDefinitions(mode: ProfileMode, token: DisplayToken): SettingDefinitionItem[] {
+    return [
+      {
+        name: "Profile to edit",
+        desc: "Choose whether you are editing the light or dark profile.",
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureProfileRow(setting, mode, rowToken);
+        }),
+      },
+      this.sectionGroup("Colors", this.paletteDescription(mode),
+        Array.from({ length: PALETTE_SIZE }, (_, index) => this.paletteDef(mode, index, token))
+      ),
+      this.sectionGroup("Import Base16 theme", this.base16Description(mode), [
+        {
+          name: "Base16 YAML",
+          desc: "Paste the full text of a Base16 .yaml file below. " +
+            "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored.",
+          render: this.renderRow(token, (setting, rowToken) => {
+            this.configureBase16TextareaRow(setting, rowToken);
+          }),
+        },
+        {
+          name: `Apply Base16 theme to ${PROFILE_LABELS[mode]}`,
+          searchable: false,
+          render: this.renderRow(token, (setting, rowToken) => {
+            this.configureBase16ApplyRow(setting, mode, rowToken);
+          }),
+        },
+      ]),
+    ];
+  }
+
+  private paletteDescription(mode: ProfileMode): string {
+    return `Edit the ${PROFILE_LABELS[mode]} palette, then select its colors in the main settings. ` +
+      "An unset palette color inherits the theme until you set it. Color 1 corresponds to base00; Color 16 to base0F.";
+  }
+
+  private base16Description(mode: ProfileMode): string {
+    return `Replace colors in the ${PROFILE_LABELS[mode]} palette from a Base16 YAML scheme. ` +
+      "Existing color assignments stay attached to the same palette slots; missing colors are unchanged.";
+  }
+
+  private paletteSlotDescription(mode: ProfileMode, index: number): string {
+    return this.plugin.settings.palettes[mode][index]
+      ? "Edit this palette color. All settings assigned to it update together."
+      : "Not set. Choose a color, or press Set to use the color shown by the picker.";
+  }
+
+  private paletteDef(mode: ProfileMode, index: number, token: DisplayToken): SettingGroupItem {
+    return {
+      name: `Color ${index + 1}`,
+      desc: this.paletteSlotDescription(mode, index),
+      render: this.renderRow(token, (setting, rowToken) => {
+        this.configurePaletteSetting(setting, mode, index, rowToken);
+      }),
+    };
+  }
+
+  private configurePaletteSetting(setting: Setting, mode: ProfileMode, index: number, token: DisplayToken): void {
+    let picker: ColorComponent | null = null;
+    const current = this.plugin.settings.palettes[mode][index];
+    setting.setDesc(this.paletteSlotDescription(mode, index));
+    const saveColor = async (value: string): Promise<void> => {
+      if (this.isStale(token)) return;
+      await this.plugin.setPaletteColor(mode, index, value);
+      if (this.isStale(token)) return;
+      setting.setDesc(this.paletteSlotDescription(mode, index));
+      this.refreshColorControls();
+    };
+    setting.addColorPicker((component) => {
+      picker = component;
+      if (current) component.setValue(current);
+      component.onChange(saveColor);
+    });
+    // An empty native color input shows a browser-provided preview. "Set" allows
+    // explicitly choosing that exact color even if it never emits a change event.
+    if (!current) {
+      setting.addButton((button) => button.setButtonText("Set").onClick(async () => {
+        if (picker) await saveColor(picker.getValue());
+      }));
+    }
+  }
+
   private colorDef(mode: ProfileMode, option: ColorOption, token: DisplayToken): SettingGroupItem {
     return {
       name: option.name,
       desc: `${option.description} Reset to inherit the theme default.`,
-      render: (setting) => {
-        this.configureColorSetting(setting, mode, option, token);
-      },
+      render: this.renderRow(token, (setting, rowToken) =>
+        this.configureColorSetting(setting, mode, option, rowToken)
+      ),
     };
   }
 
@@ -516,9 +697,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     return {
       name: option.name,
       desc: `${option.description} Reset to inherit the theme default.`,
-      render: (setting) => {
-        this.configureSliderSetting(setting, mode, option, token);
-      },
+      render: this.renderRow(token, (setting, rowToken) => {
+        this.configureSliderSetting(setting, mode, option, rowToken);
+      }),
     };
   }
 
@@ -638,46 +819,46 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     );
   }
 
-  private configureExportJsonRow(setting: Setting): void {
+  private configureExportJsonRow(setting: Setting, token: DisplayToken): void {
     setting.addButton((button) =>
       button
         .setButtonText("Export JSON")
         .setIcon("lucide-download")
         .onClick(() => {
-          this.plugin.exportSettingsJson();
+          if (!this.isStale(token)) this.plugin.exportSettingsJson();
         })
     );
   }
 
-  private configureImportJsonRow(setting: Setting): void {
+  private configureImportJsonRow(setting: Setting, token: DisplayToken): void {
     setting.addButton((button) =>
       button
         .setButtonText("Import JSON")
         .setIcon("lucide-upload")
         .onClick(() => {
-          this.plugin.importSettingsJson();
+          if (!this.isStale(token)) this.plugin.importSettingsJson();
         })
     );
   }
 
-  private configureExportSnippetRow(setting: Setting): void {
+  private configureExportSnippetRow(setting: Setting, token: DisplayToken): void {
     setting.addButton((button) =>
       button
         .setButtonText("Export snippet")
         .setIcon("lucide-file-code")
         .onClick(async () => {
-          await this.plugin.exportCssSnippet();
+          if (!this.isStale(token)) await this.plugin.exportCssSnippet();
         })
     );
   }
 
-  private configureBase16TextareaRow(setting: Setting): void {
+  private configureBase16TextareaRow(setting: Setting, token: DisplayToken): void {
     setting.addTextArea((textarea) => {
       textarea
         .setPlaceholder("Paste the base16 YAML here.")
         .setValue(this.base16Yaml)
         .onChange((value) => {
-          this.base16Yaml = value;
+          if (!this.isStale(token)) this.base16Yaml = value;
         });
       textarea.inputEl.rows = 9;
       textarea.inputEl.addClass("theme-basics-base16-textarea");
@@ -708,56 +889,88 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     );
   }
 
-  /**
-   * Adds the reset button and color picker controls of a color row.
-   * The caller owns the row's name and description.
-   */
+  /** Palette selection preserves old literal colors until explicitly changed. */
   private configureColorSetting(
     setting: Setting,
     mode: ProfileMode,
     option: ColorOption,
     token: DisplayToken
-  ): void {
-    let colorPickerComponent: ColorComponent | null = null;
+  ): () => void {
     let resetButton: ExtraButtonComponent | null = null;
-    const hasOverride = Boolean(this.plugin.getProfile(mode)[option.key]);
-    let isSyncing = false;
-
-    setting
-      .addExtraButton((button) => {
-        resetButton = button;
-        button
-          .setIcon("lucide-rotate-ccw")
-          .setTooltip("Reset to theme default")
-          .setDisabled(!hasOverride)
-          .onClick(async () => {
-            if (this.isStale(token)) return;
-            await this.plugin.resetProfileValue(mode, option.key);
-            if (this.isStale(token)) return;
-            resetButton?.setDisabled(true);
-            const pickerHex = this.plugin.styleManager.getDefaultColorValue(
-              mode,
-              option.key,
-              option.variableName
-            );
-            isSyncing = true;
-            colorPickerComponent?.setValue(pickerHex);
-            isSyncing = false;
-          });
-      })
-      .addColorPicker((picker) => {
-        colorPickerComponent = picker;
-        picker
-          .setValue(
-            this.plugin.styleManager.getDefaultColorValue(mode, option.key, option.variableName)
-          )
-          .onChange(async (value) => {
-            if (isSyncing || this.isStale(token)) return;
-            await this.plugin.setProfileValue(mode, option.key, value);
-            if (this.isStale(token)) return;
-            resetButton?.setDisabled(false);
-          });
+    let refreshSelection = (): void => {};
+    let rowModal: PaletteChoiceModal | null = null;
+    const makeChoices = (): PaletteChoice[] => {
+      const existing = this.plugin.getProfile(mode)[option.key];
+      const assignment = this.plugin.settings.colorAssignments[mode][option.key];
+      const choices: PaletteChoice[] = [{
+        value: "", label: "Inherit theme default", color: "",
+        selected: assignment === undefined && !existing,
+      }];
+      if (existing && assignment === undefined) {
+        choices.push({ value: "legacy", label: `Existing color: ${existing}`, color: existing, selected: true });
+      }
+      for (let index = 0; index < PALETTE_SIZE; index++) {
+        const color = this.plugin.settings.palettes[mode][index] ?? "";
+        choices.push({
+          value: String(index), label: `Color ${index + 1}${color ? "" : " (not set)"}`,
+          color, selected: assignment === index,
+        });
+      }
+      return choices;
+    };
+    setting.addExtraButton((button) => {
+      resetButton = button;
+      button.setIcon("lucide-rotate-ccw").setTooltip("Reset to theme default")
+        .onClick(async () => {
+          if (this.isStale(token)) return;
+          await this.plugin.resetProfileValue(mode, option.key);
+          if (this.isStale(token)) return;
+          refreshSelection();
+        });
+    }).addButton((button) => {
+      const element = button.buttonEl;
+      element.addClass("theme-basics-color-select");
+      element.setAttribute("aria-haspopup", "dialog");
+      element.setAttribute("aria-expanded", "false");
+      refreshSelection = () => {
+        const selected = makeChoices().find((choice) => choice.selected);
+        if (!selected) throw new Error("Color selection is invalid.");
+        element.empty();
+        addColorSwatch(element, selected.color);
+        element.createSpan({ cls: "theme-basics-color-label", text: selected.label });
+        const arrow = element.createSpan({ cls: "theme-basics-color-arrow", text: "▾" });
+        arrow.setAttribute("aria-hidden", "true");
+        element.setAttribute("aria-label", `${option.description} ${selected.label}`);
+        resetButton?.setDisabled(selected.value === "");
+      };
+      refreshSelection();
+      this.colorControlRefreshers.add(refreshSelection);
+      button.onClick(() => {
+        if (this.isStale(token)) return;
+        this.activeColorModal?.close();
+        const modal = new PaletteChoiceModal(this.app, option.description, makeChoices(), (choice) => {
+          if (this.isStale(token) || choice.value === "legacy") return;
+          const apply = async (): Promise<void> => {
+            if (choice.value === "") await this.plugin.resetProfileValue(mode, option.key);
+            else await this.plugin.setColorAssignment(mode, option.key, Number(choice.value));
+            if (!this.isStale(token)) refreshSelection();
+          };
+          void apply();
+        }, (closed) => {
+          element.setAttribute("aria-expanded", "false");
+          if (this.activeColorModal === closed) this.activeColorModal = null;
+          if (rowModal === closed) rowModal = null;
+        });
+        rowModal = modal;
+        this.activeColorModal = modal;
+        element.setAttribute("aria-expanded", "true");
+        modal.open();
       });
+    });
+    return () => {
+      this.colorControlRefreshers.delete(refreshSelection);
+      rowModal?.close();
+    };
   }
 
   /**

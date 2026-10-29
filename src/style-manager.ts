@@ -211,7 +211,7 @@ export class StyleManager {
   }
 
   buildCssPropertiesForMode(mode: ProfileMode): Record<string, string> {
-    const profile = this.plugin.getProfile(mode);
+    const profile = this.plugin.getResolvedProfile(mode);
     const effectiveProfile = {
       ...profile,
       linkHoverColor: profile.linkColor

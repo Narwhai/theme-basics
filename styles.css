@@ -20,8 +20,9 @@
   padding-top: 1.5rem;
 }
 
-.theme-basics-settings .theme-basics-base16-textarea {
-  min-width: 22rem;
+.theme-basics-base16-textarea {
+  width: 22rem;
+  max-width: 100%;
   font-family: var(--font-monospace);
   font-size: var(--font-smaller);
   resize: vertical;
@@ -35,4 +36,48 @@
   height: 0;
   overflow: hidden;
   pointer-events: none;
+}
+
+/* Shared by the selected control and Obsidian's suggestion modal. */
+.theme-basics-color-swatch {
+  display: inline-block;
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: var(--theme-basics-swatch-color);
+}
+
+.theme-basics-color-swatch.is-unset {
+  border-style: dashed;
+}
+
+.theme-basics-settings .theme-basics-color-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: 100%;
+}
+
+.theme-basics-color-suggestion {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.theme-basics-color-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-basics-color-arrow {
+  margin-inline-start: var(--size-4-2);
+}
+
+.theme-basics-color-current {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
 }

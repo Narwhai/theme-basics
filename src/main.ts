@@ -1,6 +1,6 @@
 import { debounce, normalizePath, Notice, Plugin } from "obsidian";
 
-import { DEFAULT_PROFILE, DEFAULT_SETTINGS, PROFILE_KEYS, PROFILE_LABELS } from "./constants";
+import { DEFAULT_PROFILE, DEFAULT_SETTINGS, isColorProfileKey, PALETTE_SIZE, PROFILE_KEYS, PROFILE_LABELS } from "./constants";
 import { DefaultThemeStyleTunerSettingTab } from "./settings-tab";
 import { StyleManager } from "./style-manager";
 import { cloneProfile, isObject, sanitizeCssValue } from "./utils";
@@ -26,7 +26,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     await this.loadSettings();
     this.settingsTab = new DefaultThemeStyleTunerSettingTab(this.app, this);
     this.addSettingTab(this.settingsTab);
-    this.register(() => { this.settingsTab = null; });
+    this.register(() => { this.settingsTab?.dispose(); this.settingsTab = null; });
     this.registerCommands();
 
     this.register(() => this.styleManager.cleanup());
@@ -62,6 +62,13 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const loadedSettings: unknown = await this.loadData();
+    if (isObject(loadedSettings) && typeof loadedSettings.version === "number") {
+      if (loadedSettings.version > DEFAULT_SETTINGS.version) {
+        throw new Error("Settings were created by a newer version of Theme Basics.");
+      }
+      // Do not silently erase malformed palette data when rewriting settings.
+      if (loadedSettings.version === 3) this.validateSettingsImport(loadedSettings);
+    }
     this.settings = this.normalizeSettings(loadedSettings);
     await this.saveData(this.settings);
   }
@@ -83,6 +90,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
   ): Promise<void> {
     const profile = this.getProfile(mode);
     profile[key] = sanitizeCssValue(typeof value === "string" ? value : "") as DefaultThemeStyleTunerProfile[Key];
+    delete this.settings.colorAssignments[mode][key];
     await this.saveSettings();
   }
 
@@ -93,6 +101,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string>;
     const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
     profile[key] = defaultProfile[key];
+    delete this.settings.colorAssignments[mode][key];
     await this.saveSettings();
   }
 
@@ -105,6 +114,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
     for (const key of keys) {
       profile[key] = defaultProfile[key];
+      delete this.settings.colorAssignments[mode][key];
     }
 
     await this.saveSettings();
@@ -112,11 +122,15 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
   async copyProfile(sourceMode: ProfileMode, targetMode: ProfileMode): Promise<void> {
     this.settings.profiles[targetMode] = cloneProfile(this.settings.profiles[sourceMode]);
+    this.settings.palettes[targetMode] = [...this.settings.palettes[sourceMode]];
+    this.settings.colorAssignments[targetMode] = { ...this.settings.colorAssignments[sourceMode] };
     await this.saveSettings();
   }
 
   async resetProfile(mode: ProfileMode): Promise<void> {
     this.settings.profiles[mode] = { ...DEFAULT_PROFILE };
+    this.settings.palettes[mode] = Array<string>(PALETTE_SIZE).fill("");
+    this.settings.colorAssignments[mode] = {};
     await this.saveSettings();
   }
 
@@ -128,6 +142,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
         light: { ...DEFAULT_PROFILE },
         dark: { ...DEFAULT_PROFILE },
       },
+      palettes: { light: Array<string>(PALETTE_SIZE).fill(""), dark: Array<string>(PALETTE_SIZE).fill("") },
+      colorAssignments: { light: {}, dark: {} },
     };
 
     await this.saveSettings();
@@ -210,72 +226,40 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       return { success: false, count: 0 };
     }
 
-    const profile = this.getProfile(mode);
-
-    const apply = (key: keyof DefaultThemeStyleTunerProfile, hex: string | undefined): void => {
-      if (!hex) return;
-      profile[key] = sanitizeCssValue(hex);
-    };
-
-    // Backgrounds — base00 = primary, base01 = secondary surfaces, base02 = selection / alt
-    apply("backgroundPrimary", colors["base00"]);
-    apply("backgroundSecondary", colors["base01"]);
-    apply("backgroundPrimaryAlt", colors["base01"]);
-    apply("backgroundSecondaryAlt", colors["base02"]);
-
-    // Text hierarchy — base03 = faint, base04 = muted, base05 = body text
-    apply("textFaint", colors["base03"]);
-    apply("textMuted", colors["base04"]);
-    apply("textNormal", colors["base05"]);
-
-    // Links
-    apply("linkColor", colors["base0d"]);           // blue  — functions / links
-    apply("externalLinkColor", colors["base0c"]);   // cyan  — support / escape chars
-    apply("unresolvedLinkColor", colors["base03"]); // faint — unresolved links
-
-    // Emphasis
-    apply("italicColor", colors["base0e"]);          // purple — keywords / italic
-
-    // Highlight — base0A (yellow) at ~30 % opacity via rgba()
-    const highlightHex = colors["base0a"];
-    if (highlightHex) {
-      apply("highlightBackground", this.hexToRgba(highlightHex, 0.3));
+    for (const [key, color] of Object.entries(colors)) {
+      const index = Number.parseInt(key.slice(4), 16);
+      this.settings.palettes[mode][index] = color;
     }
-
-    // Horizontal rule
-    apply("hrColor", colors["base02"]);
-
-    // Blockquotes
-    apply("blockquoteColor", colors["base05"]);
-    apply("blockquoteBackgroundColor", colors["base01"]);
-    apply("blockquoteBorderColor", colors["base0d"]);
-
-    // Inline / fenced code — green (strings) on secondary background
-    apply("codeNormal", colors["base0b"]);
-    apply("codeBackground", colors["base01"]);
-
-    // Tags
-    apply("tagColor", colors["base0a"]);
-    apply("tagBackground", colors["base01"]);
-    apply("tagBorderColor", colors["base0a"]);
-
-    // Headings — accent rainbow: blue → purple → cyan → green → orange → red
-    apply("h1Color", colors["base0d"]);
-    apply("h2Color", colors["base0e"]);
-    apply("h3Color", colors["base0c"]);
-    apply("h4Color", colors["base0b"]);
-    apply("h5Color", colors["base09"]);
-    apply("h6Color", colors["base08"]);
 
     await this.saveSettings();
     return { success: true, count };
   }
 
-  private hexToRgba(hex: string, alpha: number): string {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  async setPaletteColor(mode: ProfileMode, index: number, color: string): Promise<void> {
+    if (!Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE || !/^#[0-9a-f]{6}$/i.test(color)) {
+      throw new Error("Invalid palette color or slot.");
+    }
+    this.settings.palettes[mode][index] = color.toLowerCase();
+    await this.saveSettings();
+  }
+
+  async setColorAssignment(mode: ProfileMode, key: string, index: number): Promise<void> {
+    if (!isColorProfileKey(key) || !Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE) {
+      throw new Error("Invalid color assignment.");
+    }
+    this.settings.colorAssignments[mode][key] = index;
+    this.settings.profiles[mode][key] = "";
+    await this.saveSettings();
+  }
+
+  getResolvedProfile(mode: ProfileMode): DefaultThemeStyleTunerProfile {
+    const profile = cloneProfile(this.getProfile(mode));
+    for (const [key, index] of Object.entries(this.settings.colorAssignments[mode])) {
+      if (isColorProfileKey(key) && typeof index === "number") {
+        profile[key] = this.settings.palettes[mode][index] ?? "";
+      }
+    }
+    return profile;
   }
 
   private parseBase16Yaml(input: string): Record<string, string> {
@@ -300,6 +284,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       callback: async () => {
         const mode = this.getAppliedProfileMode();
         await this.resetProfile(mode);
+        this.settingsTab?.refreshDisplayPreserveScroll();
         new Notice(`${PROFILE_LABELS[mode]} profile reset.`);
       },
     });
@@ -309,6 +294,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       name: "Reset all style overrides",
       callback: async () => {
         await this.resetAllSettings();
+        this.settingsTab?.refreshDisplayPreserveScroll();
       },
     });
 
@@ -350,7 +336,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       }
     };
     if ("version" in loaded || "profiles" in loaded) {
-      if (loaded.version !== DEFAULT_SETTINGS.version || !isObject(loaded.profiles)) {
+      if ((loaded.version !== 2 && loaded.version !== 3) || !isObject(loaded.profiles)) {
         throw new Error("Unsupported settings version or missing profiles.");
       }
       if (loaded.uiProfile !== "light" && loaded.uiProfile !== "dark") {
@@ -358,6 +344,24 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       }
       validateProfile(loaded.profiles.light);
       validateProfile(loaded.profiles.dark);
+      if (loaded.version === 3) {
+        if (!isObject(loaded.palettes) || !isObject(loaded.colorAssignments)) {
+          throw new Error("Missing palettes or color assignments.");
+        }
+        for (const mode of ["light", "dark"]) {
+          const palette = loaded.palettes[mode];
+          const assignments = loaded.colorAssignments[mode];
+          if (!Array.isArray(palette) || palette.length !== PALETTE_SIZE ||
+              palette.some((color: unknown) => typeof color !== "string" || (color !== "" && !/^#[0-9a-f]{6}$/i.test(color)))) {
+            throw new Error("Each palette must contain 16 valid colors or empty slots.");
+          }
+          if (!isObject(assignments) || Object.entries(assignments).some(([key, index]) =>
+            !isColorProfileKey(key) || typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE
+          )) {
+            throw new Error("Invalid color assignments.");
+          }
+        }
+      }
       return;
     }
     if (!PROFILE_KEYS.some((key) => key in loaded)) {
@@ -374,41 +378,44 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
           ? "light"
           : this.getThemeMode();
 
-    if (
-      isObject(loaded) &&
-      typeof loaded.version === "number" &&
-      isObject(loaded.profiles)
-    ) {
-      return {
-        version: 2,
-        uiProfile: preferredProfile,
-        profiles: {
-          light: this.normalizeProfile(loaded.profiles.light),
-          dark: this.normalizeProfile(loaded.profiles.dark),
-        },
-      };
-    }
-
-    // Treat bare objects that contain profile keys as a legacy single profile.
-    if (isObject(loaded) && PROFILE_KEYS.some((k) => k in loaded)) {
-      return {
-        version: 2,
-        uiProfile: preferredProfile,
-        profiles: {
-          light: this.normalizeProfile(loaded),
-          dark: this.normalizeProfile(loaded),
-        },
-      };
-    }
-
+    const profiles = isObject(loaded) && isObject(loaded.profiles) ? loaded.profiles : null;
+    const legacy = isObject(loaded) && PROFILE_KEYS.some((key) => key in loaded) ? loaded : {};
+    const palettes = isObject(loaded) && loaded.version === 3 && isObject(loaded.palettes) ? loaded.palettes : {};
+    const assignments = isObject(loaded) && loaded.version === 3 && isObject(loaded.colorAssignments) ? loaded.colorAssignments : {};
     return {
-      version: 2,
+      version: 3,
       uiProfile: preferredProfile,
       profiles: {
-        light: this.normalizeProfile({}),
-        dark: this.normalizeProfile({}),
+        light: this.normalizeProfile(profiles ? profiles.light : legacy),
+        dark: this.normalizeProfile(profiles ? profiles.dark : legacy),
+      },
+      palettes: {
+        light: this.normalizePalette(palettes.light),
+        dark: this.normalizePalette(palettes.dark),
+      },
+      colorAssignments: {
+        light: this.normalizeAssignments(assignments.light),
+        dark: this.normalizeAssignments(assignments.dark),
       },
     };
+  }
+
+  private normalizePalette(source: unknown): string[] {
+    return Array.from({ length: PALETTE_SIZE }, (_, index) => {
+      const color: unknown = Array.isArray(source) ? source[index] : undefined;
+      return typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "";
+    });
+  }
+
+  private normalizeAssignments(source: unknown): Partial<Record<keyof DefaultThemeStyleTunerProfile, number>> {
+    const result: Partial<Record<keyof DefaultThemeStyleTunerProfile, number>> = {};
+    if (!isObject(source)) return result;
+    for (const [key, index] of Object.entries(source)) {
+      if (isColorProfileKey(key) && typeof index === "number" && Number.isInteger(index) && index >= 0 && index < PALETTE_SIZE) {
+        result[key] = index;
+      }
+    }
+    return result;
   }
 
   private normalizeProfile(source: unknown): DefaultThemeStyleTunerProfile {
@@ -421,7 +428,11 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
     for (const key of PROFILE_KEYS) {
       const nextValue = source[key];
-      mutableProfile[key] = typeof nextValue === "string" ? sanitizeCssValue(nextValue) : "";
+      if (typeof nextValue !== "string") continue;
+      const sanitized = sanitizeCssValue(nextValue);
+      // Keep safe legacy values byte-for-byte; rejected or structurally unsafe CSS
+      // must still pass through the existing sanitizer.
+      mutableProfile[key] = sanitized && !/[;{}]/.test(nextValue) ? nextValue : sanitized;
     }
 
     return normalizedProfile;

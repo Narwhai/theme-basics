@@ -16,6 +16,7 @@ function rendererChecks(harness) {
     const manager = new StyleManager({
       app: { workspace: { containerEl: { ownerDocument: { body: root } } } },
       getProfile: (mode) => profiles[mode],
+      getResolvedProfile: (mode) => profiles[mode],
       getAppliedProfileMode: () => "light",
     });
     fixtures.push({ root, manager });
