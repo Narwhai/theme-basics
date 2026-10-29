@@ -173,6 +173,110 @@ test("version 2 migration preserves independent legacy colors and empty palettes
   assert.deepEqual(plugin.settings.colorAssignments.light, {});
 });
 
+test("interactive background inherits for older profiles and round-trips independently in both modes", async () => {
+  const { plugin, DEFAULT_SETTINGS } = fixture();
+  const old = structuredClone(DEFAULT_SETTINGS);
+  delete old.profiles.light.interactiveBackground;
+  delete old.profiles.dark.interactiveBackground;
+  old.profiles.light.textNormal = "#123456";
+  const loadedPlugin = fixture().plugin;
+  loadedPlugin.loadData = async () => old;
+  await loadedPlugin.loadSettings();
+  assert.equal(loadedPlugin.getProfile("light").interactiveBackground, "");
+  assert.equal(loadedPlugin.getProfile("dark").interactiveBackground, "");
+  await plugin.importSettings(JSON.stringify({ version: 2, uiProfile: "light", profiles: {
+    light: { textNormal: "#123456" }, dark: {},
+  } }));
+  assert.equal(plugin.getProfile("light").interactiveBackground, "");
+  assert.equal(plugin.getProfile("dark").interactiveBackground, "");
+  await plugin.importSettings(JSON.stringify(old));
+  for (const mode of ["light", "dark"]) {
+    assert.equal(plugin.getProfile(mode).interactiveBackground, "");
+    assert.equal(plugin.styleManager.buildCssPropertiesForMode(mode)["--interactive-normal"], undefined);
+  }
+  assert.equal(plugin.getProfile("light").textNormal, "#123456");
+
+  await plugin.setPaletteColor("light", 9, "#abcdef");
+  await plugin.setColorAssignment("light", "interactiveBackground", 9);
+  await plugin.setProfileValue("dark", "interactiveBackground", "#112233");
+  assert.equal(plugin.styleManager.buildCssPropertiesForMode("light")["--interactive-normal"], "#abcdef");
+  assert.equal(plugin.styleManager.buildCssPropertiesForMode("dark")["--interactive-normal"], "#112233");
+  const snippet = plugin.styleManager.generateSnippetCss();
+  assert.match(snippet, /body\.theme-light\s*\{[^}]*--interactive-normal: #abcdef;/);
+  assert.match(snippet, /body\.theme-dark\s*\{[^}]*--interactive-normal: #112233;/);
+  const imported = fixture().plugin;
+  await imported.importSettings(JSON.stringify(plugin.settings));
+  assert.equal(imported.getResolvedProfile("light").interactiveBackground, "#abcdef");
+  assert.equal(imported.getResolvedProfile("dark").interactiveBackground, "#112233");
+
+  await imported.setProfileValue("light", "interactiveBackground", "#445566");
+  await imported.setPaletteColor("dark", 9, "#778899");
+  await imported.setColorAssignment("dark", "interactiveBackground", 9);
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("light")["--interactive-normal"], "#445566");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("dark")["--interactive-normal"], "#778899");
+  await imported.copyProfile("dark", "light");
+  assert.equal(imported.getResolvedProfile("light").interactiveBackground, "#778899");
+  await imported.resetProfileValue("light", "interactiveBackground");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("light")["--interactive-normal"], undefined);
+  assert.equal(imported.getResolvedProfile("dark").interactiveBackground, "#778899");
+  await imported.resetProfile("dark");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("dark")["--interactive-normal"], undefined);
+});
+
+test("form field background inherits for older profiles and supports palette, custom, reset and export", async () => {
+  const { plugin, DEFAULT_SETTINGS } = fixture();
+  const old = structuredClone(DEFAULT_SETTINGS);
+  delete old.profiles.light.formFieldBackground;
+  delete old.profiles.dark.formFieldBackground;
+  old.profiles.light.interactiveBackground = "#123456";
+  old.profiles.light.textNormal = "#334455";
+  const loadedPlugin = fixture().plugin;
+  loadedPlugin.loadData = async () => old;
+  await loadedPlugin.loadSettings();
+  assert.equal(loadedPlugin.getProfile("light").formFieldBackground, "");
+  assert.equal(loadedPlugin.getProfile("dark").formFieldBackground, "");
+  await plugin.importSettings(JSON.stringify({ version: 2, uiProfile: "light", profiles: {
+    light: { textNormal: "#123456" }, dark: {},
+  } }));
+  assert.equal(plugin.getProfile("light").formFieldBackground, "");
+  assert.equal(plugin.getProfile("dark").formFieldBackground, "");
+  await plugin.importSettings(JSON.stringify(old));
+  for (const mode of ["light", "dark"]) {
+    assert.equal(plugin.getProfile(mode).formFieldBackground, "");
+    assert.equal(plugin.styleManager.buildCssPropertiesForMode(mode)["--background-modifier-form-field"], undefined);
+  }
+  await plugin.setPaletteColor("light", 9, "#abcdef");
+  await plugin.setColorAssignment("light", "formFieldBackground", 9);
+  await plugin.setProfileValue("dark", "formFieldBackground", "#112233");
+  const lightProps = plugin.styleManager.buildCssPropertiesForMode("light");
+  assert.equal(lightProps["--background-modifier-form-field"], "#abcdef");
+  assert.equal(lightProps["--interactive-normal"], "#123456");
+  assert.equal(lightProps["--text-normal"], "#334455");
+  assert.equal(lightProps["--background-modifier-form-field-hover"], undefined);
+  assert.equal(lightProps["--background-modifier-border"], undefined);
+  assert.equal(plugin.styleManager.buildCssPropertiesForMode("dark")["--background-modifier-form-field"], "#112233");
+  const snippet = plugin.styleManager.generateSnippetCss();
+  assert.match(snippet, /body\.theme-light\s*\{[^}]*--background-modifier-form-field: #abcdef;/);
+  assert.match(snippet, /body\.theme-dark\s*\{[^}]*--background-modifier-form-field: #112233;/);
+  assert.doesNotMatch(snippet, /--background-modifier-form-field-hover:/);
+  const imported = fixture().plugin;
+  await imported.importSettings(JSON.stringify(plugin.settings));
+  assert.equal(imported.getResolvedProfile("light").formFieldBackground, "#abcdef");
+  assert.equal(imported.getResolvedProfile("dark").formFieldBackground, "#112233");
+  await imported.setProfileValue("light", "formFieldBackground", "#445566");
+  await imported.setPaletteColor("dark", 9, "#778899");
+  await imported.setColorAssignment("dark", "formFieldBackground", 9);
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("light")["--background-modifier-form-field"], "#445566");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("dark")["--background-modifier-form-field"], "#778899");
+  await imported.copyProfile("dark", "light");
+  assert.equal(imported.getResolvedProfile("light").formFieldBackground, "#778899");
+  await imported.resetProfileValue("light", "formFieldBackground");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("light")["--background-modifier-form-field"], undefined);
+  assert.equal(imported.getResolvedProfile("dark").formFieldBackground, "#778899");
+  await imported.resetProfile("dark");
+  assert.equal(imported.styleManager.buildCssPropertiesForMode("dark")["--background-modifier-form-field"], undefined);
+});
+
 test("palette assignments follow edited and imported slots without touching literals or other mode", async () => {
   const { plugin } = fixture();
   plugin.settings.profiles.light.highlightBackground = "rgba(254, 220, 186, 0.3)";
@@ -262,9 +366,41 @@ test("CSS properties and snippets resolve slots before derived colors", async ()
   assert.equal(plugin.styleManager.buildCssPropertiesForMode("light")["--tag-background-hover"], "hover(light, #abcdef)");
 });
 
+test("custom literals survive palette changes, profile copy, JSON and CSS export", async () => {
+  const { plugin } = fixture();
+  await plugin.setPaletteColor("light", 9, "#abcdee");
+  await plugin.setColorAssignment("light", "tagBorderColor", 9);
+  await plugin.setColorAssignment("light", "linkColor", 9);
+  await plugin.setProfileValue("light", "tagBorderColor", "#8799aa");
+  await plugin.setProfileValue("light", "linkColor", "#778899");
+  await plugin.setProfileValue("dark", "tagBorderColor", "#112233");
+  await plugin.applyBase16Theme('base09: "ffeeaa"', "light");
+  assert.equal(plugin.getResolvedProfile("light").tagBorderColor, "#8799aa");
+  assert.equal(plugin.getResolvedProfile("dark").tagBorderColor, "#112233");
+  assert.equal(plugin.settings.colorAssignments.light.tagBorderColor, undefined);
+  plugin.styleManager.computeAutoHoverColor = (mode, value) => `hover(${mode}, ${value})`;
+  const props = plugin.styleManager.buildCssPropertiesForMode("light");
+  assert.equal(props["--tag-border-color"], "#8799aa");
+  assert.equal(props["--tag-border-color-hover"], "#8799aa");
+  assert.equal(props["--link-color-hover"], "hover(light, #778899)");
+  assert.match(plugin.styleManager.generateSnippetCss(), /--tag-border-color: #8799aa;/);
+  const exported = JSON.stringify(plugin.settings);
+  const imported = fixture().plugin;
+  await imported.importSettings(exported);
+  assert.equal(imported.getProfile("light").tagBorderColor, "#8799aa");
+  assert.equal(imported.getProfile("dark").tagBorderColor, "#112233");
+  await imported.copyProfile("light", "dark");
+  await imported.setProfileValue("dark", "tagBorderColor", "#334455");
+  assert.equal(imported.getProfile("light").tagBorderColor, "#8799aa");
+  await imported.resetProfileValue("light", "tagBorderColor");
+  assert.equal(imported.getResolvedProfile("light").tagBorderColor, "");
+  assert.equal(imported.getProfile("dark").tagBorderColor, "#334455");
+});
+
 test("settings use neutral palette labels and preserve a legacy value until changed", async () => {
-  const { plugin, SettingsTab, SuggestModal } = fixture();
+  const { plugin, SettingsTab, SuggestModal, writes } = fixture();
   plugin.settings.profiles.light.h1Color = "rgb(10 20 30 / 0.5)";
+  plugin.styleManager.tryToPickerHex = () => "#0a141e";
   const tab = new SettingsTab(plugin.app, plugin);
   const definitions = tab.getSettingDefinitions();
   const page = definitions.find((item) => item.name === "Color palette");
@@ -288,18 +424,33 @@ test("settings use neutral palette labels and preserve a legacy value until chan
     },
   };
   const button = { buttonEl: element, onClick(callback) { this.click = callback; return this; } };
+  const customContainer = {
+    input: null,
+    querySelector() { return this.input; },
+    empty() { this.input = null; },
+  };
   const row = {
+    controlEl: { createDiv() { return customContainer; } },
     addExtraButton(configure) { configure(extra); return this; },
     addButton(configure) { configure(button); return this; },
   };
   h1.render(row);
-  assert.match(element.attributes["aria-label"], /Existing color: rgb\(10 20 30 \/ 0.5\)/);
+  assert.match(element.attributes["aria-label"], /Custom: rgb\(10 20 30 \/ 0.5\)/);
   assert.deepEqual(element.children[0].props, { "--theme-basics-swatch-color": "rgb(10 20 30 / 0.5)" });
   button.click();
   const modal = SuggestModal.latest;
   const choices = modal.getSuggestions("");
-  assert.equal(choices.find((choice) => choice.value === "legacy").selected, true);
+  assert.equal(choices.find((choice) => choice.value === "custom").selected, true);
   assert.equal(choices.find((choice) => choice.value === "12").label, "Color 13 (not set)");
+  modal.onChooseSuggestion(choices.find((choice) => choice.value === "custom"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(plugin.getProfile("light").h1Color, "rgb(10 20 30 / 0.5)");
+  assert.equal(customContainer.input.value, "#0a141e");
+  assert.equal(writes.length, 0);
+  assert.ok(customContainer.button, "the picker preview can be explicitly applied without changing it first");
+  await customContainer.button.click();
+  assert.equal(plugin.getProfile("light").h1Color, "#0a141e");
+  assert.equal(writes.length, 1);
   modal.onChooseSuggestion(choices.find((choice) => choice.value === "12"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(plugin.settings.colorAssignments.light.h1Color, 12);
@@ -307,6 +458,53 @@ test("settings use neutral palette labels and preserve a legacy value until chan
   await extra.click();
   assert.equal(plugin.settings.colorAssignments.light.h1Color, undefined);
   assert.match(element.attributes["aria-label"], /Inherit theme default/);
+});
+
+test("pending custom choices are transient, profile-scoped, and cleared only by relevant replacements", async () => {
+  const { plugin, SettingsTab } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  plugin.settingsTab = tab;
+  tab.pendingCustom.light.add("tagBorderColor");
+  tab.pendingCustom.dark.add("tagBorderColor");
+  await plugin.setPaletteColor("light", 0, "#123456");
+  await plugin.applyBase16Theme('base00: "abcdef"', "light");
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), true);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), true);
+  assert.equal(Object.hasOwn(plugin.settings, "pendingCustom"), false);
+
+  await plugin.resetProfileValue("light", "tagBorderColor");
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), false);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), true);
+  tab.pendingCustom.light.add("tagBorderColor");
+  await plugin.setColorAssignment("light", "tagBorderColor", 0);
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), false);
+  tab.pendingCustom.light.add("tagBorderColor");
+  await plugin.copyProfile("light", "dark");
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), true);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), false);
+  tab.pendingCustom.dark.add("tagBorderColor");
+  await plugin.resetProfileValues("light", ["tagBorderColor"]);
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), false);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), true);
+  tab.pendingCustom.light.add("tagBorderColor");
+  await assert.rejects(plugin.importSettings("{}"));
+  const saveData = plugin.saveData;
+  plugin.saveData = async () => { throw new Error("Disk full"); };
+  await assert.rejects(plugin.importSettings(JSON.stringify(plugin.settings)), /Disk full/);
+  plugin.saveData = saveData;
+  assert.equal(tab.pendingCustom.light.has("tagBorderColor"), true);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), true);
+  await plugin.importSettings(JSON.stringify(plugin.settings));
+  assert.equal(tab.pendingCustom.light.size, 0);
+  assert.equal(tab.pendingCustom.dark.size, 0);
+  tab.pendingCustom.light.add("tagBorderColor");
+  tab.pendingCustom.dark.add("tagBorderColor");
+  await plugin.resetProfile("light");
+  assert.equal(tab.pendingCustom.light.size, 0);
+  assert.equal(tab.pendingCustom.dark.has("tagBorderColor"), true);
+  await plugin.resetAllSettings();
+  assert.equal(tab.pendingCustom.light.size, 0);
+  assert.equal(tab.pendingCustom.dark.size, 0);
 });
 
 test("loading malformed or newer palette settings never overwrites saved data", async () => {

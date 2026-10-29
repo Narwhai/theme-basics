@@ -1,5 +1,6 @@
 import {
   App,
+  ButtonComponent,
   ColorComponent,
   DropdownComponent,
   ExtraButtonComponent,
@@ -107,6 +108,11 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   private base16Yaml = "";
   private activeColorModal: PaletteChoiceModal | null = null;
   private colorControlRefreshers = new Set<() => void>();
+  /** Unset custom choices are transient UI state, not stored color values. */
+  private readonly pendingCustom: Record<ProfileMode, Set<string>> = {
+    light: new Set(),
+    dark: new Set(),
+  };
   private legacyPalettePage = false;
 
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
@@ -118,7 +124,20 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   dispose(): void {
     this.clearColorControls();
+    this.clearPendingCustom();
     this.displayToken = { active: true };
+  }
+
+  clearPendingCustomValue(mode: ProfileMode, key: string): void {
+    this.pendingCustom[mode].delete(key);
+  }
+
+  clearPendingCustom(mode?: ProfileMode): void {
+    if (mode) this.pendingCustom[mode].clear();
+    else {
+      this.pendingCustom.light.clear();
+      this.pendingCustom.dark.clear();
+    }
   }
 
   override hide(): void {
@@ -186,6 +205,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       COLOR_OPTIONS_BY_KEY.backgroundSecondary,
       COLOR_OPTIONS_BY_KEY.backgroundPrimaryAlt,
       COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
+      COLOR_OPTIONS_BY_KEY.interactiveBackground,
+      COLOR_OPTIONS_BY_KEY.formFieldBackground,
     ].filter((option): option is ColorOption => option !== undefined);
 
     const linkOptions = [
@@ -390,6 +411,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       COLOR_OPTIONS_BY_KEY.backgroundSecondary,
       COLOR_OPTIONS_BY_KEY.backgroundPrimaryAlt,
       COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
+      COLOR_OPTIONS_BY_KEY.interactiveBackground,
+      COLOR_OPTIONS_BY_KEY.formFieldBackground,
     ]) {
       if (option) {
         this.addColorSetting(backgroundsSection, editedMode, option, token);
@@ -898,17 +921,23 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   ): () => void {
     let resetButton: ExtraButtonComponent | null = null;
     let refreshSelection = (): void => {};
+    let refreshCustomPicker = (): void => {};
+    const isPending = (): boolean => this.pendingCustom[mode].has(option.key);
+    const setPending = (pending: boolean): void => {
+      if (pending) this.pendingCustom[mode].add(option.key);
+      else this.clearPendingCustomValue(mode, option.key);
+    };
     let rowModal: PaletteChoiceModal | null = null;
     const makeChoices = (): PaletteChoice[] => {
       const existing = this.plugin.getProfile(mode)[option.key];
       const assignment = this.plugin.settings.colorAssignments[mode][option.key];
+      const isCustom = assignment === undefined && (Boolean(existing) || isPending());
       const choices: PaletteChoice[] = [{
         value: "", label: "Inherit theme default", color: "",
-        selected: assignment === undefined && !existing,
+        selected: assignment === undefined && !existing && !isPending(),
+      }, {
+        value: "custom", label: "Custom", color: isCustom ? existing : "", selected: isCustom,
       }];
-      if (existing && assignment === undefined) {
-        choices.push({ value: "legacy", label: `Existing color: ${existing}`, color: existing, selected: true });
-      }
       for (let index = 0; index < PALETTE_SIZE; index++) {
         const color = this.plugin.settings.palettes[mode][index] ?? "";
         choices.push({
@@ -923,6 +952,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       button.setIcon("lucide-rotate-ccw").setTooltip("Reset to theme default")
         .onClick(async () => {
           if (this.isStale(token)) return;
+          setPending(false);
           await this.plugin.resetProfileValue(mode, option.key);
           if (this.isStale(token)) return;
           refreshSelection();
@@ -937,11 +967,14 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         if (!selected) throw new Error("Color selection is invalid.");
         element.empty();
         addColorSwatch(element, selected.color);
-        element.createSpan({ cls: "theme-basics-color-label", text: selected.label });
+        const label = selected.value === "custom" && selected.color
+          ? `Custom: ${selected.color}` : selected.label;
+        element.createSpan({ cls: "theme-basics-color-label", text: label });
         const arrow = element.createSpan({ cls: "theme-basics-color-arrow", text: "▾" });
         arrow.setAttribute("aria-hidden", "true");
-        element.setAttribute("aria-label", `${option.description} ${selected.label}`);
+        element.setAttribute("aria-label", `${option.description} ${label}`);
         resetButton?.setDisabled(selected.value === "");
+        refreshCustomPicker();
       };
       refreshSelection();
       this.colorControlRefreshers.add(refreshSelection);
@@ -949,10 +982,34 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         if (this.isStale(token)) return;
         this.activeColorModal?.close();
         const modal = new PaletteChoiceModal(this.app, option.description, makeChoices(), (choice) => {
-          if (this.isStale(token) || choice.value === "legacy") return;
+          if (this.isStale(token)) return;
           const apply = async (): Promise<void> => {
-            if (choice.value === "") await this.plugin.resetProfileValue(mode, option.key);
-            else await this.plugin.setColorAssignment(mode, option.key, Number(choice.value));
+            if (choice.value === "custom") {
+              const assignment = this.plugin.settings.colorAssignments[mode][option.key];
+              if (assignment !== undefined) {
+                // Capture the slot before removing its reference. An unset slot
+                // stays unset rather than committing the browser's picker color.
+                const color = this.plugin.getResolvedProfile(mode)[option.key];
+                if (color) {
+                  setPending(false);
+                  await this.plugin.setProfileValue(mode, option.key, color);
+                } else {
+                  // resetProfileValue clears stale pending state synchronously;
+                  // record this new choice before awaiting its persistence.
+                  const reset = this.plugin.resetProfileValue(mode, option.key);
+                  setPending(true);
+                  await reset;
+                }
+              } else {
+                // Existing literals, including modern CSS and alpha, must not be
+                // converted to picker hex until the user actually changes them.
+                setPending(!this.plugin.getProfile(mode)[option.key]);
+              }
+            } else {
+              setPending(false);
+              if (choice.value === "") await this.plugin.resetProfileValue(mode, option.key);
+              else await this.plugin.setColorAssignment(mode, option.key, Number(choice.value));
+            }
             if (!this.isStale(token)) refreshSelection();
           };
           void apply();
@@ -967,6 +1024,70 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         modal.open();
       });
     });
+
+    const customContainer = setting.controlEl.createDiv({ cls: "theme-basics-custom-color" });
+    let picker: ColorComponent | null = null;
+    let setButton: ButtonComponent | null = null;
+    let syncingPicker = false;
+    refreshCustomPicker = () => {
+      const existing = this.plugin.getProfile(mode)[option.key];
+      const assignment = this.plugin.settings.colorAssignments[mode][option.key];
+      const isCustom = assignment === undefined && (Boolean(existing) || isPending());
+      if (!isCustom) {
+        customContainer.empty();
+        picker = null;
+        setButton = null;
+        return;
+      }
+      if (!picker) {
+        const currentPicker = new ColorComponent(customContainer);
+        picker = currentPicker;
+        const input = customContainer.querySelector<HTMLInputElement>("input[type=color]");
+        if (!input) throw new Error("Custom color picker is unavailable.");
+        input.setAttribute("aria-label", `Custom color for ${option.description}`);
+        currentPicker.onChange(async (color) => {
+          if (syncingPicker || picker !== currentPicker || this.isStale(token) ||
+              this.plugin.settings.colorAssignments[mode][option.key] !== undefined ||
+              (!isPending() && !this.plugin.getProfile(mode)[option.key])) return;
+          setPending(false);
+          await this.plugin.setProfileValue(mode, option.key, color);
+          if (!this.isStale(token)) refreshSelection();
+        });
+      }
+      const hex = existing ? this.plugin.styleManager.tryToPickerHex(existing) : null;
+      const input = customContainer.querySelector<HTMLInputElement>("input[type=color]");
+      if (!input) throw new Error("Custom color picker is unavailable.");
+      input.setAttribute("title", existing && !hex
+        ? "The current color cannot be displayed in the picker; choosing a color will replace it."
+        : "Choose a custom color");
+      if (hex && picker.getValue() !== hex) {
+        syncingPicker = true;
+        try { picker.setValue(hex); }
+        finally { syncingPicker = false; }
+      }
+      // A picker represents colors as opaque hex, so even a successfully
+      // resolved legacy value may differ from what it displays (e.g. rgba).
+      // Let users explicitly apply that preview without rewriting on render.
+      const needsExplicitSet = !existing || existing !== picker.getValue();
+      if (needsExplicitSet && !setButton) {
+        const currentButton = new ButtonComponent(customContainer).setButtonText("Set").setTooltip(
+          "Use the color currently shown by the picker"
+        );
+        setButton = currentButton;
+        currentButton.onClick(async () => {
+          if (setButton !== currentButton || this.isStale(token) || !picker ||
+              this.plugin.settings.colorAssignments[mode][option.key] !== undefined ||
+              (!isPending() && !this.plugin.getProfile(mode)[option.key])) return;
+          setPending(false);
+          await this.plugin.setProfileValue(mode, option.key, picker.getValue());
+          if (!this.isStale(token)) refreshSelection();
+        });
+      } else if (!needsExplicitSet && setButton) {
+        setButton.buttonEl.remove();
+        setButton = null;
+      }
+    };
+    refreshCustomPicker();
     return () => {
       this.colorControlRefreshers.delete(refreshSelection);
       rowModal?.close();

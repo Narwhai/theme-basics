@@ -5,6 +5,8 @@ export interface DefaultThemeStyleTunerProfile {
   backgroundSecondary: string;
   backgroundPrimaryAlt: string;
   backgroundSecondaryAlt: string;
+  interactiveBackground: string;
+  formFieldBackground: string;
   textNormal: string;
   textMuted: string;
   textFaint: string;

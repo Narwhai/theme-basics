@@ -53,6 +53,16 @@
   border-style: dashed;
 }
 
+.theme-basics-settings .theme-basics-custom-color {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.theme-basics-settings .theme-basics-custom-color:empty {
+  display: none;
+}
+
 .theme-basics-settings .theme-basics-color-select {
   display: inline-flex;
   align-items: center;

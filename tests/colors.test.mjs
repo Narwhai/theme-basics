@@ -70,6 +70,48 @@ function rendererChecks(harness) {
     foreign.root.setCssProps({ "--h1-color": "#fedcba" });
     foreign.manager.cleanup();
 
+    const interactive = fixture();
+    interactive.root.setCssProps({ "--interactive-normal": "#112233" });
+    const interactiveButton = interactive.root.createEl("button", { cls: "theme-basics-color-select", text: "Color 1" });
+    const interactiveBefore = getComputedStyle(interactiveButton).backgroundColor;
+    interactive.profiles.light.interactiveBackground = "#abcdef";
+    interactive.manager.applyStyles();
+    flush();
+    const interactiveApplied = getComputedStyle(interactiveButton).backgroundColor;
+    interactive.profiles.light.interactiveBackground = "";
+    interactive.manager.applyStyles();
+    flush();
+    const interactiveReset = getComputedStyle(interactiveButton).backgroundColor;
+
+    const formField = fixture();
+    formField.root.setCssProps({
+      "--background-modifier-form-field": "#112233",
+      "--background-modifier-form-field-hover": "#aabbcc",
+      "--interactive-normal": "#445566",
+      "--text-normal": "#778899",
+      "--background-modifier-border": "#99aabb",
+    });
+    const searchInput = formField.root.createDiv({ cls: "search-input-container" }).createEl("input", { type: "search" });
+    const textInput = formField.root.createEl("input", { type: "text" });
+    const formButton = formField.root.createEl("button", { text: "Color 1" });
+    const formValues = () => ({
+      search: getComputedStyle(searchInput).backgroundColor,
+      text: getComputedStyle(textInput).backgroundColor,
+      button: getComputedStyle(formButton).backgroundColor,
+      color: getComputedStyle(textInput).color,
+      border: getComputedStyle(textInput).borderColor,
+      hover: getComputedStyle(textInput).getPropertyValue("--background-modifier-form-field-hover").trim(),
+    });
+    const formBefore = formValues();
+    formField.profiles.light.formFieldBackground = "#abcdef";
+    formField.manager.applyStyles();
+    flush();
+    const formApplied = formValues();
+    formField.profiles.light.formFieldBackground = "";
+    formField.manager.applyStyles();
+    flush();
+    const formReset = formValues();
+
     const failure = fixture();
     failure.profiles.light.h1Color = "#abcdef";
     failure.manager.applyStyles();
@@ -80,6 +122,8 @@ function rendererChecks(harness) {
 
     return {
       colors, properties, hover, snippet, firstVariable, secondVariable,
+      interactive: { before: interactiveBefore, applied: interactiveApplied, reset: interactiveReset },
+      formField: { before: formBefore, applied: formApplied, reset: formReset },
       ownership: { afterEmpty, afterOverride, afterRefresh, afterReset, afterCleanup,
         unrelated: owned.root.style.getPropertyValue("--unrelated"),
         classRemoved: !owned.root.classList.contains(BODY_CLASS),
@@ -139,6 +183,23 @@ test("only owned inline properties are changed, then restored on reset/unload", 
     afterReset: "#123456", afterCleanup: "#123456", unrelated: "preserved",
     classRemoved: true, newerValue: "#fedcba",
   });
+});
+
+test("interactive background applies to selector buttons and restores the inherited value", () => {
+  assert.deepEqual(result.interactive, {
+    before: "rgb(17, 34, 51)", applied: "rgb(171, 205, 239)", reset: "rgb(17, 34, 51)",
+  });
+});
+
+test("form field background updates search and text inputs without changing other controls", () => {
+  const before = result.formField.before;
+  assert.equal(before.search, "rgb(17, 34, 51)");
+  assert.equal(before.text, "rgb(17, 34, 51)");
+  assert.deepEqual(result.formField.applied, { ...before, search: "rgb(171, 205, 239)", text: "rgb(171, 205, 239)" });
+  assert.deepEqual(result.formField.reset, before);
+  assert.equal(before.button, "rgb(68, 85, 102)");
+  assert.equal(before.color, "rgb(119, 136, 153)");
+  assert.equal(before.hover, "#aabbcc");
 });
 
 test("failed theme probes restore applied overrides and plugin classes", () => {

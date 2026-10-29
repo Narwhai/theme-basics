@@ -91,6 +91,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     const profile = this.getProfile(mode);
     profile[key] = sanitizeCssValue(typeof value === "string" ? value : "") as DefaultThemeStyleTunerProfile[Key];
     delete this.settings.colorAssignments[mode][key];
+    this.settingsTab?.clearPendingCustomValue(mode, key);
     await this.saveSettings();
   }
 
@@ -102,6 +103,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
     profile[key] = defaultProfile[key];
     delete this.settings.colorAssignments[mode][key];
+    this.settingsTab?.clearPendingCustomValue(mode, key);
     await this.saveSettings();
   }
 
@@ -115,6 +117,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     for (const key of keys) {
       profile[key] = defaultProfile[key];
       delete this.settings.colorAssignments[mode][key];
+      this.settingsTab?.clearPendingCustomValue(mode, key);
     }
 
     await this.saveSettings();
@@ -124,6 +127,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     this.settings.profiles[targetMode] = cloneProfile(this.settings.profiles[sourceMode]);
     this.settings.palettes[targetMode] = [...this.settings.palettes[sourceMode]];
     this.settings.colorAssignments[targetMode] = { ...this.settings.colorAssignments[sourceMode] };
+    this.settingsTab?.clearPendingCustom(targetMode);
     await this.saveSettings();
   }
 
@@ -131,6 +135,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     this.settings.profiles[mode] = { ...DEFAULT_PROFILE };
     this.settings.palettes[mode] = Array<string>(PALETTE_SIZE).fill("");
     this.settings.colorAssignments[mode] = {};
+    this.settingsTab?.clearPendingCustom(mode);
     await this.saveSettings();
   }
 
@@ -145,6 +150,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       palettes: { light: Array<string>(PALETTE_SIZE).fill(""), dark: Array<string>(PALETTE_SIZE).fill("") },
       colorAssignments: { light: {}, dark: {} },
     };
+    this.settingsTab?.clearPendingCustom();
 
     await this.saveSettings();
     new Notice("All overrides reset.");
@@ -190,6 +196,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     // Do not replace the current profiles until validation and persistence succeed.
     await this.saveData(settings);
     this.settings = settings;
+    this.settingsTab?.clearPendingCustom();
     this.styleManager.applyStyles();
     // Definitions are cached even while the settings tab is closed (1.13+).
     this.settingsTab?.refreshDisplayPreserveScroll();
@@ -249,6 +256,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     }
     this.settings.colorAssignments[mode][key] = index;
     this.settings.profiles[mode][key] = "";
+    this.settingsTab?.clearPendingCustomValue(mode, key);
     await this.saveSettings();
   }
 

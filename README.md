@@ -18,6 +18,8 @@ A plugin that allows you to customize basic appearance properties such as backgr
   - Secondary background color
   - Primary alt background color
   - Secondary alt background color
+  - Interactive background color for buttons and dropdowns throughout Obsidian
+  - Form field background color for search and other text fields throughout Obsidian
 - Set link colors and emphasis colors
   - Internal link color
   - External link color
@@ -71,7 +73,15 @@ Color 16 to base0F. Assign any color setting to a slot to share that color with
 other settings. Each color selector opens a searchable chooser with labeled
 swatches and marks the current choice. Editing a slot updates all assignments to
 it. Unset slots inherit the theme until a color is supplied, and each setting can
-also inherit directly.
+also inherit directly. Select **Custom** to pick an independent color for a single
+setting. If a populated palette slot was selected, the picker starts with that
+slot's color; subsequent palette edits and imports do not change the custom color.
+If no color is set, choose one or press **Set** to use the picker preview. Until
+then the Custom selection remains pending while the settings tab is open, including
+when changing profiles or importing a Base16 palette. Existing CSS colors,
+including transparency, are preserved until you choose a replacement in
+the picker; choosing a replacement sets an opaque color. When the picker preview
+differs from an existing value, press **Set** to apply the displayed opaque color.
 
 Base16 import replaces only supplied palette colors, leaving assignments, legacy
 color overrides, and missing slots untouched. Existing custom colors stay in place

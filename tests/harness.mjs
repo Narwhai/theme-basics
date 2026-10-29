@@ -34,6 +34,21 @@ export function createHarness(bundle) {
       return run;
     },
     Notice: class {},
+    ColorComponent: class {
+      constructor(container) {
+        this.input = { value: '#000000', attributes: {}, setAttribute(key, value) { this.attributes[key] = value; } };
+        container.input = this.input;
+      }
+      getValue() { return this.input.value; }
+      setValue(value) { this.input.value = value; this.change?.(value); return this; }
+      onChange(callback) { this.change = callback; return this; }
+    },
+    ButtonComponent: class {
+      constructor(container) { this.buttonEl = { remove() {} }; container.button = this; }
+      setButtonText() { return this; }
+      setTooltip() { return this; }
+      onClick(callback) { this.click = callback; return this; }
+    },
     SuggestModal: class {
       static latest;
       constructor() { api.SuggestModal.latest = this; this.inputEl = { setAttribute() {} }; }
