@@ -13,22 +13,24 @@ async function rendererChecks(bundle, styles) {
   const liveTab = app.plugins.plugins['theme-basics']?.settingsTab;
   if (!liveTab || typeof liveTab.addRow !== 'function') throw new Error('Enable Theme Basics in the test vault before running this test.');
   const probe = activeDocument.body.createDiv({ cls: 'theme-basics-offscreen' });
-  let Setting, ColorComponent, ButtonComponent;
+  let Setting, ColorComponent, ButtonComponent, TextComponent;
   try { liveTab.addRow(probe, 'probe', '', (setting) => {
     Setting = setting.constructor;
     setting.addColorPicker((picker) => { ColorComponent = picker.constructor; });
+    setting.addText((text) => { TextComponent = text.constructor; });
     setting.addButton((button) => { ButtonComponent = button.constructor; });
   }); }
   finally { probe.remove(); }
-  if (!Setting || !ColorComponent || !ButtonComponent) throw new Error('Could not obtain Obsidian UI constructors.');
+  if (!Setting || !ColorComponent || !ButtonComponent || !TextComponent) throw new Error('Could not obtain Obsidian UI constructors.');
   const RealPluginSettingTab = Object.getPrototypeOf(Object.getPrototypeOf(liveTab)).constructor;
   const quickSwitcher = app.internalPlugins.plugins.switcher?.instance?.QuickSwitcherModal;
   if (!quickSwitcher) throw new Error('Enable the Quick Switcher core plugin to run palette modal checks.');
   const SuggestModal = Object.getPrototypeOf(Object.getPrototypeOf(quickSwitcher));
+  const notices = [];
   const fakeApi = {
-    Setting, SuggestModal, ColorComponent, ButtonComponent,
+    Setting, SuggestModal, ColorComponent, ButtonComponent, TextComponent,
     debounce: (fn) => Object.assign(fn, { cancel() {} }),
-    Notice: class {},
+    Notice: class { constructor(message) { notices.push(message); } },
     Plugin: class { constructor(app) { this.app = app; this.manifest = { name: 'Theme Basics UI Test', id: 'theme-basics-ui-test' }; } },
     PluginSettingTab: RealPluginSettingTab,
   };
@@ -54,6 +56,8 @@ async function rendererChecks(bundle, styles) {
     plugin.settings.profiles.light.h2Color = 'oklch(60% 0.2 30)';
     let saves = 0;
     plugin.saveData = async () => { saves++; };
+    const importSettingsFile = plugin.importSettingsJson.bind(plugin);
+    const exportSettingsFile = plugin.exportSettingsJson.bind(plugin);
     const rootActions = [];
     plugin.exportSettingsJson = () => rootActions.push('export');
     plugin.importSettingsJson = () => rootActions.push('import');
@@ -63,6 +67,7 @@ async function rendererChecks(bundle, styles) {
       applyStyles() {}, getDefaultNumericValue(_m, _k, _v, fallback) { return fallback; },
       ensureWithinRange(value) { return value; },
       tryToPickerHex(value) { return colorResolver.tryToPickerHex(value); },
+      colorsMatch(first, second) { return colorResolver.colorsMatch(first, second); },
     };
     const tab = new SettingsTab(plugin.app, plugin);
     plugin.settingsTab = tab;
@@ -125,8 +130,8 @@ async function rendererChecks(bundle, styles) {
         }
         if (!row('Primary background')) throw new Error('Back did not restore main settings');
       };
-      const h1row = h1Row();
-      const h1button = selectButton(h1row);
+      let h1row = h1Row();
+      let h1button = selectButton(h1row);
       const h2Row = () => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-description')?.textContent.includes('Text color for H2 headings.'));
       const legacy = { label: h1button.textContent, swatch: swatch(h1button),
         resolved: plugin.getResolvedProfile('light').h1Color,
@@ -139,11 +144,13 @@ async function rendererChecks(bundle, styles) {
       await choose(legacyModal, 'Custom');
       legacy.afterCustom = plugin.getProfile('light').h1Color;
       legacy.afterCustomSaves = saves;
-      const applyPreview = h1row.querySelector('.theme-basics-custom-color button');
-      legacy.hasApplyPreview = applyPreview?.textContent === 'Set';
-      if (!applyPreview) throw new Error('Missing button to apply the displayed picker color');
-      await click(applyPreview);
-      legacy.afterApply = plugin.getProfile('light').h1Color;
+      const commitPreview = [...h1row.querySelectorAll('.theme-basics-custom-color button')].find((el) => el.textContent === 'Set');
+      legacy.hasCommit = Boolean(commitPreview);
+      if (!commitPreview) throw new Error('Missing Set control for the custom color');
+      await click(commitPreview);
+      h1row = h1Row();
+      h1button = selectButton(h1row);
+      legacy.afterApply = plugin.getResolvedProfile('light').h1Color;
       legacy.afterApplySaves = saves;
       legacy.afterApplyButton = Boolean(h1row.querySelector('.theme-basics-custom-color button'));
       legacy.modernAfterApply = plugin.getProfile('light').h2Color;
@@ -277,7 +284,11 @@ async function rendererChecks(bundle, styles) {
       customInput.value = '#89abcd';
       await fire(customInput, 'input');
       await fire(customInput, 'change');
-      custom.edited = plugin.getProfile('light').tagBorderColor;
+      custom.beforeCommit = plugin.getResolvedProfile('light').tagBorderColor;
+      custom.paletteBeforeCommit = plugin.settings.palettes.light.length;
+      await click([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      custom.edited = plugin.getResolvedProfile('light').tagBorderColor;
+      custom.paletteAfterCommit = plugin.settings.palettes.light.length;
       await plugin.setPaletteColor('light', 0, '#445566');
       await plugin.applyBase16Theme('base00: "778899"', 'light');
       custom.afterPalette = plugin.getResolvedProfile('light').tagBorderColor;
@@ -292,8 +303,8 @@ async function rendererChecks(bundle, styles) {
         hasSet: Boolean([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set')) };
       darkInput.value = '#000000';
       await click([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
-      custom.darkSet = { literal: plugin.getProfile('dark').tagBorderColor, shown: darkInput.value,
-        light: plugin.getProfile('light').tagBorderColor };
+      custom.darkSet = { color: plugin.getResolvedProfile('dark').tagBorderColor, shown: darkInput.value,
+        light: plugin.getResolvedProfile('light').tagBorderColor };
       await choose(await openChoices(tagRow()), 'Color 8 (not set)');
       await choose(await openChoices(tagRow()), 'Custom');
       custom.emptySlot = { literal: plugin.getProfile('dark').tagBorderColor,
@@ -301,17 +312,17 @@ async function rendererChecks(bundle, styles) {
         hasSet: Boolean([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set')) };
       tagRow().querySelector('input[type=color]').value = '#000000';
       await click([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
-      custom.emptySlotSet = plugin.getProfile('dark').tagBorderColor;
+      custom.emptySlotSet = plugin.getResolvedProfile('dark').tagBorderColor;
       const profileBack = row('Profile to edit').querySelector('select');
       profileBack.value = 'light';
       await fire(profileBack);
-      custom.restored = { literal: plugin.getProfile('light').tagBorderColor,
-        picker: tagRow().querySelector('input[type=color]').value };
+      custom.restored = { color: plugin.getResolvedProfile('light').tagBorderColor,
+        picker: Boolean(tagRow().querySelector('input[type=color]')) };
       customInput.value = '#999999';
       await fire(customInput, 'input');
       await fire(customInput, 'change');
-      custom.staleAfterProfileSwitch = plugin.getProfile('light').tagBorderColor;
-      const previousPicker = tagRow().querySelector('input[type=color]');
+      custom.staleAfterProfileSwitch = plugin.getResolvedProfile('light').tagBorderColor;
+      const previousPicker = customInput;
       await choose(await openChoices(tagRow()), 'Color 1');
       custom.slot = { assignment: plugin.settings.colorAssignments.light.tagBorderColor,
         literal: plugin.getProfile('light').tagBorderColor, picker: Boolean(tagRow().querySelector('input[type=color]')) };
@@ -326,7 +337,7 @@ async function rendererChecks(bundle, styles) {
       previousPicker.value = '#222222';
       await fire(previousPicker, 'input');
       await fire(previousPicker, 'change');
-      custom.staleAfterReselect = plugin.getProfile('light').tagBorderColor;
+      custom.staleAfterReselect = plugin.getResolvedProfile('light').tagBorderColor;
       await click(tagRow().querySelector('.extra-setting-button'));
       custom.reset = { literal: plugin.getProfile('light').tagBorderColor,
         assignment: plugin.settings.colorAssignments.light.tagBorderColor ?? null,
@@ -511,7 +522,8 @@ async function rendererChecks(bundle, styles) {
       interactivePicker.value = '#445566';
       await fire(interactivePicker, 'input');
       await fire(interactivePicker, 'change');
-      interactive.lightCustom = plugin.getProfile('light').interactiveBackground;
+      await click([...interactiveRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      interactive.lightCustom = plugin.getResolvedProfile('light').interactiveBackground;
       await switchProfile('dark');
       interactive.darkInitial = selectButton(interactiveRow()).textContent;
       await choose(await openChoices(interactiveRow()), 'Custom');
@@ -519,7 +531,8 @@ async function rendererChecks(bundle, styles) {
       darkInteractivePicker.value = '#778899';
       await fire(darkInteractivePicker, 'input');
       await fire(darkInteractivePicker, 'change');
-      interactive.darkCustom = plugin.getProfile('dark').interactiveBackground;
+      await click([...interactiveRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      interactive.darkCustom = plugin.getResolvedProfile('dark').interactiveBackground;
       await switchProfile('light');
       interactive.lightRestored = plugin.getResolvedProfile('light').interactiveBackground;
       await click(interactiveRow().querySelector('.extra-setting-button'));
@@ -540,7 +553,8 @@ async function rendererChecks(bundle, styles) {
       formPicker.value = '#112233';
       await fire(formPicker, 'input');
       await fire(formPicker, 'change');
-      formField.lightCustom = plugin.getProfile('light').formFieldBackground;
+      await click([...formRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      formField.lightCustom = plugin.getResolvedProfile('light').formFieldBackground;
       await switchProfile('dark');
       formField.darkInitial = selectButton(formRow()).textContent;
       await choose(await openChoices(formRow()), 'Custom');
@@ -548,8 +562,9 @@ async function rendererChecks(bundle, styles) {
       darkFormPicker.value = '#334455';
       await fire(darkFormPicker, 'input');
       await fire(darkFormPicker, 'change');
-      formField.darkCustom = plugin.getProfile('dark').formFieldBackground;
-      formField.darkInteractive = plugin.getProfile('dark').interactiveBackground;
+      await click([...formRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      formField.darkCustom = plugin.getResolvedProfile('dark').formFieldBackground;
+      formField.darkInteractive = plugin.getResolvedProfile('dark').interactiveBackground;
       await switchProfile('light');
       formField.lightRestored = plugin.getResolvedProfile('light').formFieldBackground;
       await click(formRow().querySelector('.extra-setting-button'));
@@ -557,9 +572,327 @@ async function rendererChecks(bundle, styles) {
         light: plugin.getResolvedProfile('light').formFieldBackground,
         dark: plugin.getResolvedProfile('dark').formFieldBackground };
 
+      // Exercise expanded slots, color text, list import, validation and reuse
+      // through the actual controls without touching the installed plugin's data.
+      await plugin.resetAllSettings();
+      tab.refreshDisplayPreserveScroll();
+      await tick();
+      await openPalette();
+      const expanded = {};
+      await click(row('Add palette color').querySelector('button'));
+      expanded.afterAdd = { count: plugin.settings.palettes.light.length, present: Boolean(row('Color 17')) };
+      const manualInput = row('Color 17').querySelector('.theme-basics-palette-text');
+      manualInput.value = 'oklch(60% 0.2 30 / 0.5)';
+      await fire(manualInput, 'input');
+      expanded.beforeManualSet = plugin.settings.palettes.light[16];
+      await click([...row('Color 17').querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      expanded.manual = { value: plugin.settings.palettes.light[16], swatch: swatch(row('Color 17')) };
+      await closePalette();
+      await choose(await openChoices(h1Row()), 'Color 17');
+      await choose(await openChoices(h2Row()), 'Color 1 (not set)');
+      await openPalette();
+      const setList = async (format, value) => {
+        const formatControl = row('Color list format').querySelector('select');
+        formatControl.value = format;
+        await fire(formatControl);
+        const input = row('Color list').querySelector('textarea');
+        input.value = value;
+        await fire(input, 'input');
+      };
+      const importList = async (label) => click([...row('Import colors').querySelectorAll('button')].find((el) => el.textContent === label));
+      await setList('csv', '#123456, rgba(1, 2, 3, 0.5)');
+      await importList('Append colors');
+      expanded.append = { count: plugin.settings.palettes.light.length, last: plugin.settings.palettes.light.slice(-2),
+        h1: plugin.getResolvedProfile('light').h1Color, assignment: plugin.settings.colorAssignments.light.h1Color };
+      await setList('json', '["#abcdef", "oklch(70% 0.1 40)"]');
+      await importList('Replace by position');
+      expanded.replace = { count: plugin.settings.palettes.light.length, first: plugin.settings.palettes.light.slice(0, 2),
+        h1: plugin.getResolvedProfile('light').h1Color, h2: plugin.getResolvedProfile('light').h2Color,
+        assignment: plugin.settings.colorAssignments.light.h1Color, last: plugin.settings.palettes.light.slice(-2) };
+      await setList('csv', '#ffffff, invalid-color');
+      const beforeInvalid = JSON.stringify(plugin.settings);
+      const beforeInvalidSaves = saves;
+      await importList('Replace by position');
+      expanded.invalid = { unchanged: JSON.stringify(plugin.settings) === beforeInvalid,
+        writes: saves - beforeInvalidSaves, notice: notices[notices.length - 1] };
+      await setList('csv', '#abcdef');
+      const save = plugin.saveData;
+      plugin.saveData = async () => { throw new Error('Disk full'); };
+      await importList('Append colors');
+      plugin.saveData = save;
+      expanded.failedSave = { unchanged: JSON.stringify(plugin.settings) === beforeInvalid, notice: notices[notices.length - 1] };
+      await closePalette();
+      await choose(await openChoices(tagRow()), 'Color 17');
+      await choose(await openChoices(tagRow()), 'Custom');
+      const customText = () => tagRow().querySelector('.theme-basics-palette-text');
+      expanded.seed = { text: customText().value, count: plugin.settings.palettes.light.length,
+        color: plugin.getResolvedProfile('light').tagBorderColor };
+      customText().value = 'rgb(1 2 3 / 50%)';
+      await fire(customText(), 'input');
+      expanded.draft = { count: plugin.settings.palettes.light.length,
+        color: plugin.getResolvedProfile('light').tagBorderColor };
+      await click([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      expanded.reuse = { count: plugin.settings.palettes.light.length, assignment: plugin.settings.colorAssignments.light.tagBorderColor,
+        color: plugin.getResolvedProfile('light').tagBorderColor };
+      await choose(await openChoices(tagRow()), 'Custom');
+      customText().value = 'rgb(1 2 3 / 50.01%)';
+      await fire(customText(), 'input');
+      expanded.alphaDraft = { count: plugin.settings.palettes.light.length, color: plugin.getResolvedProfile('light').tagBorderColor };
+      await click([...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set'));
+      expanded.alphaCommit = { count: plugin.settings.palettes.light.length,
+        assignment: plugin.settings.colorAssignments.light.tagBorderColor, color: plugin.getResolvedProfile('light').tagBorderColor,
+        shared: plugin.settings.palettes.light[18] };
+
+      // Exercise failures and overlapping UI edits while saves are deferred.
+      const races = {};
+      const originalSave = plugin.saveData;
+      let profileSelect = row('Profile to edit').querySelector('select');
+      plugin.saveData = async () => { throw new Error('Disk full'); };
+      profileSelect.value = 'dark';
+      await fire(profileSelect);
+      races.failedProfile = { selected: profileSelect.value, committed: plugin.getEditedProfileMode(), notice: notices.at(-1) };
+      plugin.saveData = originalSave;
+
+      // While the profile save is pending the displayed mode must match the
+      // still-editable rows, including after a settings rebuild.
+      const pendingSwitch = Promise.withResolvers();
+      plugin.saveData = () => pendingSwitch.promise;
+      profileSelect = row('Profile to edit').querySelector('select');
+      profileSelect.value = 'dark';
+      await fire(profileSelect);
+      const visibleDuringSwitch = { selected: profileSelect.value, disabled: profileSelect.disabled,
+        committed: plugin.getEditedProfileMode() };
+      tab.refreshDisplayPreserveScroll();
+      await tick();
+      const rebuiltDuringSwitch = row('Profile to edit').querySelector('select');
+      const rebuiltState = { selected: rebuiltDuringSwitch.value, disabled: rebuiltDuringSwitch.disabled,
+        committed: plugin.getEditedProfileMode() };
+      await choose(await openChoices(tagRow()), 'Color 1');
+      pendingSwitch.resolve();
+      await tick();
+      await tick();
+      const committedSelect = row('Profile to edit').querySelector('select');
+      races.pendingSwitch = { before: visibleDuringSwitch, rebuilt: rebuiltState,
+        after: { selected: committedSelect.value, disabled: committedSelect.disabled, committed: plugin.getEditedProfileMode() },
+        lightAssignment: plugin.settings.colorAssignments.light.tagBorderColor,
+        darkAssignment: plugin.settings.colorAssignments.dark.tagBorderColor ?? null };
+      plugin.saveData = originalSave;
+      await switchProfile('light');
+      profileSelect = row('Profile to edit').querySelector('select');
+
+      // A failed older switch must not override a later queued selection.
+      const switchWrites = [];
+      plugin.saveData = () => new Promise((resolve, reject) => switchWrites.push({ resolve, reject }));
+      for (const mode of ['dark', 'light', 'dark']) {
+        profileSelect.value = mode;
+        await fire(profileSelect);
+      }
+      switchWrites[0].reject(new Error('First switch failed'));
+      await tick();
+      const selectedAfterOldFailure = row('Profile to edit').querySelector('select');
+      const intermediateSelection = { value: selectedAfterOldFailure.value, disabled: selectedAfterOldFailure.disabled };
+      switchWrites[1].resolve();
+      await tick();
+      switchWrites[2].resolve();
+      await tick();
+      const finalSelection = row('Profile to edit').querySelector('select');
+      races.overlappingProfiles = { afterOldFailure: intermediateSelection,
+        selected: finalSelection.value, disabled: finalSelection.disabled, committed: plugin.getEditedProfileMode() };
+      plugin.saveData = originalSave;
+      await switchProfile('light');
+
+      // Rebuilding the row during a pending switch must still refresh the latest mode.
+      const rebuildingSwitch = Promise.withResolvers();
+      plugin.saveData = () => rebuildingSwitch.promise;
+      const oldProfileSelect = row('Profile to edit').querySelector('select');
+      oldProfileSelect.value = 'dark';
+      await fire(oldProfileSelect);
+      tab.refreshDisplayPreserveScroll();
+      await tick();
+      rebuildingSwitch.resolve();
+      await tick();
+      races.rebuiltProfile = { selected: row('Profile to edit').querySelector('select').value,
+        committed: plugin.getEditedProfileMode() };
+      plugin.saveData = originalSave;
+      await switchProfile('light');
+
+      await openPalette();
+      const pendingPalette = Promise.withResolvers();
+      plugin.saveData = () => pendingPalette.promise;
+      const thirdColor = row('Color 3');
+      const thirdInput = thirdColor.querySelector('.theme-basics-palette-text');
+      thirdInput.value = '#334455';
+      await fire(thirdInput, 'input');
+      thirdColor.querySelector('button').click();
+      await tick();
+      thirdInput.value = '#667788';
+      await fire(thirdInput, 'input');
+      pendingPalette.resolve();
+      await tick();
+      races.palette = { saved: plugin.settings.palettes.light[2], draft: thirdInput.value,
+        swatch: swatch(thirdColor), description: thirdColor.querySelector('.setting-item-description').textContent };
+      plugin.saveData = async () => { throw new Error('Picker save failed'); };
+      const failedPicker = thirdColor.querySelector('input[type=color]');
+      failedPicker.value = '#abcdef';
+      await fire(failedPicker, 'input');
+      await fire(failedPicker, 'change');
+      races.failedPicker = { saved: plugin.settings.palettes.light[2], picker: failedPicker.value,
+        draft: thirdInput.value, swatch: swatch(thirdColor), notice: notices.at(-1) };
+      plugin.saveData = originalSave;
+      await click(thirdColor.querySelector('button'));
+      races.failedPicker.retry = plugin.settings.palettes.light[2];
+      await closePalette();
+
+      await choose(await openChoices(tagRow()), 'Custom');
+      let customDraft = tagRow().querySelector('.theme-basics-palette-text');
+      customDraft.value = '#334455';
+      await fire(customDraft, 'input');
+      const pendingCustom = Promise.withResolvers();
+      plugin.saveData = () => pendingCustom.promise;
+      [...tagRow().querySelectorAll('button')].find((el) => el.textContent === 'Set').click();
+      await tick();
+      customDraft.value = '#667788';
+      await fire(customDraft, 'input');
+      pendingCustom.resolve();
+      await tick();
+      customDraft = tagRow().querySelector('.theme-basics-palette-text');
+      races.custom = { saved: plugin.getResolvedProfile('light').tagBorderColor,
+        draft: customDraft?.value ?? null, label: selectButton(tagRow()).textContent };
+      plugin.saveData = originalSave;
+
+      // A pending palette assignment must not clear a newer Custom draft.
+      const pendingAssignment = Promise.withResolvers();
+      plugin.saveData = () => pendingAssignment.promise;
+      await choose(await openChoices(tagRow()), 'Color 1');
+      customDraft = tagRow().querySelector('.theme-basics-palette-text');
+      customDraft.value = '#aabbcc';
+      await fire(customDraft, 'input');
+      pendingAssignment.resolve();
+      await tick();
+      races.assignmentDraft = { assignment: plugin.settings.colorAssignments.light.tagBorderColor,
+        draft: tagRow().querySelector('.theme-basics-palette-text')?.value ?? null,
+        label: selectButton(tagRow()).textContent };
+      plugin.saveData = originalSave;
+      const pendingReset = Promise.withResolvers();
+      plugin.saveData = () => pendingReset.promise;
+      tagRow().querySelector('.extra-setting-button').click();
+      await tick();
+      customDraft = tagRow().querySelector('.theme-basics-palette-text');
+      customDraft.value = '#ddeeff';
+      await fire(customDraft, 'input');
+      pendingReset.resolve();
+      await tick();
+      races.resetDraft = { assignment: plugin.settings.colorAssignments.light.tagBorderColor ?? null,
+        draft: tagRow().querySelector('.theme-basics-palette-text')?.value ?? null,
+        label: selectButton(tagRow()).textContent };
+      plugin.saveData = originalSave;
+      await click(tagRow().querySelector('.extra-setting-button'));
+
+      // Intercept only creation of detached file inputs; never open a real OS
+      // dialog or change the user's live plugin settings.
+      await openPalette();
+      const descriptor = Object.getOwnPropertyDescriptor(activeDocument, 'createElement');
+      const createElement = activeDocument.createElement;
+      const captureFileInput = async (open, expectedTag = 'input') => {
+        let captured;
+        activeDocument.createElement = function (tag, options) {
+          const element = createElement.call(this, tag, options);
+          if (tag === expectedTag) element.click = () => {
+            if (tag === 'a' || element.type === 'file') captured = element;
+          };
+          return element;
+        };
+        try { await open(); }
+        finally {
+          if (descriptor) Object.defineProperty(activeDocument, 'createElement', descriptor);
+          else delete activeDocument.createElement;
+        }
+        if (!captured) throw new Error('File input was not created');
+        return captured;
+      };
+      try {
+        const loadFile = async (name, contents) => {
+          const fileInput = await captureFileInput(() =>
+            click([...row('Color list').querySelectorAll('button')].find((el) => el.textContent === 'Load file')));
+          const files = new DataTransfer();
+          files.items.add(new File([contents], name));
+          fileInput.files = files.files;
+          await fire(fileInput);
+        };
+        const fileResults = {};
+        await loadFile('colors.csv', '#010203, rgba(1, 2, 3, 0.5)');
+        fileResults.csv = { format: row('Color list format').querySelector('select').value,
+          text: row('Color list').querySelector('textarea').value };
+        await click([...row('Import colors').querySelectorAll('button')].find((el) => el.textContent === 'Append colors'));
+        fileResults.append = plugin.settings.palettes.light.slice(-2);
+        await loadFile('colors.json', '["#abcdef", "#123456"]');
+        fileResults.json = { format: row('Color list format').querySelector('select').value,
+          text: row('Color list').querySelector('textarea').value };
+        await click([...row('Import colors').querySelectorAll('button')].find((el) => el.textContent === 'Replace by position'));
+        fileResults.replace = plugin.settings.palettes.light.slice(0, 2);
+        const beforeBadFile = JSON.stringify(plugin.settings);
+        await loadFile('bad.json', '["#abcdef", "not-a-color"]');
+        await click([...row('Import colors').querySelectorAll('button')].find((el) => el.textContent === 'Append colors'));
+        fileResults.invalid = { unchanged: JSON.stringify(plugin.settings) === beforeBadFile, notice: notices.at(-1) };
+        const delayedFile = Promise.withResolvers();
+        const delayedInput = await captureFileInput(() =>
+          click([...row('Color list').querySelectorAll('button')].find((el) => el.textContent === 'Load file')));
+        Object.defineProperty(delayedInput, 'files', { configurable: true,
+          value: [{ name: 'old.csv', text: () => delayedFile.promise }] });
+        delayedInput.dispatchEvent(new Event('change', { bubbles: true }));
+        await tick();
+        const newerList = row('Color list').querySelector('textarea');
+        newerList.value = '["#654321"]';
+        await fire(newerList, 'input');
+        const newerFormat = row('Color list format').querySelector('select');
+        newerFormat.value = 'json';
+        await fire(newerFormat);
+        delayedFile.resolve('#abcdef');
+        await tick();
+        fileResults.newerDraft = { format: row('Color list format').querySelector('select').value,
+          text: row('Color list').querySelector('textarea').value };
+        const delayedFile2 = Promise.withResolvers();
+        const delayedInput2 = await captureFileInput(() =>
+          click([...row('Color list').querySelectorAll('button')].find((el) => el.textContent === 'Load file')));
+        Object.defineProperty(delayedInput2, 'files', { configurable: true,
+          value: [{ name: 'older.csv', text: () => delayedFile2.promise }] });
+        delayedInput2.dispatchEvent(new Event('change', { bubbles: true }));
+        await tick();
+        await loadFile('newer.json', '["#fedcba"]');
+        delayedFile2.resolve('#111111');
+        await tick();
+        fileResults.newerFile = { format: row('Color list format').querySelector('select').value,
+          text: row('Color list').querySelector('textarea').value };
+        races.files = fileResults;
+
+        // Exercise the actual settings-file handler with a >1 MB backup, but do
+        // not render 110,000 controls in the detached fixture.
+        const largeSettings = structuredClone(plugin.settings);
+        largeSettings.palettes.dark = Array(110000).fill('#abcdef');
+        const largeFile = new File([JSON.stringify(largeSettings)], 'settings.json', { type: 'application/json' });
+        const settingsInput = await captureFileInput(() => importSettingsFile());
+        const settingsFiles = new DataTransfer();
+        settingsFiles.items.add(largeFile);
+        settingsInput.files = settingsFiles.files;
+        const refresh = tab.refreshDisplayPreserveScroll;
+        tab.refreshDisplayPreserveScroll = () => {};
+        try {
+          settingsInput.dispatchEvent(new Event('change', { bubbles: true }));
+          for (let attempts = 0; attempts < 150 && plugin.settings.palettes.dark.length !== 110000; attempts++) await tick();
+          races.largeSettingsFile = { size: largeFile.size, colors: plugin.settings.palettes.dark.length,
+            last: plugin.settings.palettes.dark.at(-1), notice: notices.at(-1) };
+        } finally { tab.refreshDisplayPreserveScroll = refresh; }
+        const exportAnchor = await captureFileInput(() => exportSettingsFile(), 'a');
+        races.settingsExport = { download: exportAnchor.download, attached: exportAnchor.isConnected,
+          activeDocument: exportAnchor.ownerDocument === activeDocument, blob: exportAnchor.href.startsWith('blob:') };
+      } finally {
+        if (descriptor) Object.defineProperty(activeDocument, 'createElement', descriptor);
+        else delete activeDocument.createElement;
+      }
+
       results[path] = { root, page, stalePage, afterReset, afterAllReset, afterRepeat, afterPageHide, afterDispose, initial, legacy, legacyChoices, emptySlot,
         afterSet, afterEdit, options, afterSelect, afterUpdate, current, keyboard, afterInherit, dark, light,
-        imported, importedChoices, modalAccessibility, afterHide, custom, pending, interactive, formField };
+        imported, importedChoices, modalAccessibility, afterHide, custom, pending, interactive, formField, expanded, races };
     } finally { host.clearPageStack(); tab.dispose(); colorResolver.cleanup(); hostEl.remove(); stylesheet.remove(); }
   }
   return { results, supportsDeclarative };
@@ -567,7 +900,7 @@ async function rendererChecks(bundle, styles) {
 const bundle = await bundlePlugin();
 const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const code = `JSON.stringify(await (${rendererChecks.toString()})(${JSON.stringify(bundle)}, ${JSON.stringify(styles)}))`;
-const output = execFileSync('obsidian', [`vault=${vault}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 }).trim();
+const output = execFileSync('obsidian', [`vault=${vault}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024 }).trim();
 const lines = output.split('\n');
 const resultLine = lines.findLast((line) => line.startsWith('=> '));
 const diagnostics = lines.filter((line) => line !== resultLine);
@@ -592,19 +925,19 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(results[path].afterPageHide, { color: '', rootRestored: true });
     assert.deepEqual(results[path].afterDispose, { color: '' });
   });
-  test(`${path}: palette controls initialize unset with 16 neutral labels`, options, () => {
-    assert.deepEqual(results[path].initial.labels, Array.from({ length: 16 }, (_, i) => `Color ${i + 1}`));
-    assert.equal(results[path].initial.pickers, 16);
+  test(`${path}: palette slots use neutral labels, including a newly committed custom color`, options, () => {
+    assert.deepEqual(results[path].initial.labels, Array.from({ length: 17 }, (_, i) => `Color ${i + 1}`));
+    assert.equal(results[path].initial.pickers, 17);
     assert.equal(results[path].initial.unset, 16);
-    assert.equal(results[path].initial.setButtons, 16);
-    assert.deepEqual(results[path].initial.palette, Array(16).fill(''));
+    assert.equal(results[path].initial.setButtons, 17);
+    assert.deepEqual(results[path].initial.palette, [...Array(16).fill(''), '#010203']);
   });
   test(`${path}: legacy colors persist until selecting an unset slot, then Set activates it`, options, () => {
     assert.deepEqual(results[path].legacy, { label: 'Custom: rgba(1, 2, 3, 0.3)▾',
       swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false }, resolved: 'rgba(1, 2, 3, 0.3)', computed: 'rgba(1, 2, 3, 0.3)',
       picker: '#010203', modern: 'oklch(60% 0.2 30)', modernPicker: '#de3e2d', initialSaves: 0,
-      afterCustom: 'rgba(1, 2, 3, 0.3)', afterCustomSaves: 0, hasApplyPreview: true,
-      afterApply: '#010203', afterApplySaves: 1, afterApplyButton: false, modernAfterApply: 'oklch(60% 0.2 30)' });
+      afterCustom: 'rgba(1, 2, 3, 0.3)', afterCustomSaves: 0, hasCommit: true,
+      afterApply: 'rgba(1, 2, 3, 0.3)', afterApplySaves: 1, afterApplyButton: false, modernAfterApply: 'oklch(60% 0.2 30)' });
     assert.deepEqual(results[path].legacyChoices[1], { label: 'Custom Current',
       swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false } });
     assert.deepEqual(results[path].emptySlot, { assignment: 1, literal: '', resolved: '', swatch: { color: '', unset: true } });
@@ -613,14 +946,14 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].afterSet.resolved, results[path].afterSet.shown);
     assert.deepEqual(results[path].afterSet.swatch, { color: results[path].afterSet.shown, unset: false });
   });
-  test(`${path}: explicitly apply the unchanged opaque preview of a translucent color`, options, () => {
+  test(`${path}: Set commits an unchanged translucent custom color as-is`, options, () => {
     const legacy = results[path].legacy;
     assert.equal(legacy.resolved, 'rgba(1, 2, 3, 0.3)');
     assert.equal(legacy.afterCustom, 'rgba(1, 2, 3, 0.3)');
     assert.equal(legacy.afterCustomSaves, 0);
     assert.equal(legacy.picker, '#010203');
-    assert.equal(legacy.hasApplyPreview, true);
-    assert.equal(legacy.afterApply, '#010203');
+    assert.equal(legacy.hasCommit, true);
+    assert.equal(legacy.afterApply, 'rgba(1, 2, 3, 0.3)');
     assert.equal(legacy.afterApplySaves, 1);
     assert.equal(legacy.afterApplyButton, false);
     assert.equal(legacy.modernAfterApply, 'oklch(60% 0.2 30)');
@@ -628,7 +961,7 @@ for (const path of ['declarative', 'legacy']) {
   test(`${path}: picker edit, swatches, assignment and inherit`, options, () => {
     assert.equal(results[path].afterEdit.value, '#123456');
     assert.match(results[path].afterEdit.description, /All settings assigned/);
-    assert.equal(results[path].options.length, 18);
+    assert.equal(results[path].options.length, 19);
     assert.deepEqual(results[path].options[0], { label: 'Inherit theme default Current', swatch: { color: '', unset: true } });
     assert.deepEqual(results[path].options[1], { label: 'Custom', swatch: { color: '', unset: true } });
     assert.deepEqual(results[path].options[2], { label: 'Color 1', swatch: { color: '#123456', unset: false } });
@@ -636,6 +969,7 @@ for (const path of ['declarative', 'legacy']) {
     for (let i = 3; i <= 16; i++) {
       assert.deepEqual(results[path].options[i + 1], { label: `Color ${i} (not set)`, swatch: { color: '', unset: true } });
     }
+    assert.deepEqual(results[path].options[18], { label: 'Color 17', swatch: { color: '#010203', unset: false } });
     assert.deepEqual(results[path].afterSelect, { assignment: 0, resolved: '#123456', selected: 'Color 1▾',
       swatch: { color: '#123456', unset: false }, accessible: 'Main note and app background. Color 1', computed: 'rgb(18, 52, 86)' });
     assert.deepEqual(results[path].afterUpdate, { swatch: { color: '#345678', unset: false }, resolved: '#345678' });
@@ -647,19 +981,22 @@ for (const path of ['declarative', 'legacy']) {
   test(`${path}: custom colors seed from a slot and stay independent`, options, () => {
     const custom = results[path].custom;
     assert.equal(custom.seed, '#abcdef');
-    assert.equal(custom.seededLiteral, '#abcdef');
-    assert.equal(custom.seededAssignment, null);
+    assert.equal(custom.seededLiteral, '');
+    assert.equal(custom.seededAssignment, 0);
     assert.match(custom.pickerLabel, /Custom color for Border color for tags/);
+    assert.equal(custom.beforeCommit, '#abcdef');
+    assert.equal(custom.paletteBeforeCommit, 17);
+    assert.equal(custom.paletteAfterCommit, 18);
     assert.equal(custom.edited, '#89abcd');
     assert.equal(custom.afterPalette, '#89abcd');
     assert.equal(custom.sharedAfterPalette, '#778899');
     assert.deepEqual(custom.darkUnset, { literal: '', writes: 0, hasSet: true });
     assert.equal(custom.darkSet.shown, '#000000');
-    assert.equal(custom.darkSet.literal, '#000000');
+    assert.equal(custom.darkSet.color, '#000000');
     assert.equal(custom.darkSet.light, '#89abcd');
-    assert.deepEqual(custom.emptySlot, { literal: '', assignment: null, hasSet: true });
+    assert.deepEqual(custom.emptySlot, { literal: '', assignment: 7, hasSet: true });
     assert.equal(custom.emptySlotSet, '#000000');
-    assert.deepEqual(custom.restored, { literal: '#89abcd', picker: '#89abcd' });
+    assert.deepEqual(custom.restored, { color: '#89abcd', picker: false });
     assert.equal(custom.staleAfterProfileSwitch, '#89abcd');
     assert.deepEqual(custom.slot, { assignment: 0, literal: '', picker: false });
     assert.deepEqual(custom.staleAfterSlot, { assignment: 0, literal: '' });
@@ -694,7 +1031,8 @@ for (const path of ['declarative', 'legacy']) {
     const pending = results[path].pending;
     const unsetCustom = { label: 'Custom▾', picker: true, set: true, literal: '', assignment: null };
     const inherit = { label: 'Inherit theme default▾', picker: false, set: false, literal: '', assignment: null };
-    const black = { label: 'Custom: #000000▾', picker: true, set: false, literal: '#000000', assignment: null };
+    const black = { label: 'Color 17▾', picker: false, set: false, literal: '', assignment: 16 };
+    const unsetSlotCustom = { label: 'Custom▾', picker: true, set: true, literal: '', assignment: 7 };
     assert.deepEqual(pending.fromInherit, unsetCustom);
     assert.equal(pending.fromInheritWrites, 0);
     assert.equal(pending.noPersistedState, true);
@@ -707,8 +1045,8 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(pending.darkExplicitBlack, black);
     assert.deepEqual(pending.lightAfterDarkSet, unsetCustom);
     assert.deepEqual(pending.settingReset, inherit);
-    assert.deepEqual(pending.fromUnsetSlot, unsetCustom);
-    assert.deepEqual(pending.unsetSlotAfterPage, unsetCustom);
+    assert.deepEqual(pending.fromUnsetSlot, unsetSlotCustom);
+    assert.deepEqual(pending.unsetSlotAfterPage, unsetSlotCustom);
     assert.deepEqual(pending.unsetSlotExplicitBlack, black);
     assert.deepEqual(pending.profileResetLight, inherit);
     assert.deepEqual(pending.profileResetOther, unsetCustom);
@@ -722,6 +1060,78 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(pending.base16ImportLight, unsetCustom);
     assert.deepEqual(pending.base16ImportOther, unsetCustom);
     assert.deepEqual(pending.tabHide, inherit);
+  });
+  test(`${path}: expanded palette UI adds, imports, validates and reuses CSS colors`, options, () => {
+    const expanded = results[path].expanded;
+    assert.deepEqual(expanded.afterAdd, { count: 17, present: true });
+    assert.equal(expanded.beforeManualSet, '');
+    assert.deepEqual(expanded.manual, { value: 'oklch(60% 0.2 30 / 0.5)',
+      swatch: { color: 'oklch(60% 0.2 30 / 0.5)', unset: false } });
+    assert.deepEqual(expanded.append, { count: 19, last: ['#123456', 'rgba(1, 2, 3, 0.5)'],
+      h1: 'oklch(60% 0.2 30 / 0.5)', assignment: 16 });
+    assert.deepEqual(expanded.replace, { count: 19, first: ['#abcdef', 'oklch(70% 0.1 40)'],
+      h1: 'oklch(60% 0.2 30 / 0.5)', h2: '#abcdef', assignment: 16,
+      last: ['#123456', 'rgba(1, 2, 3, 0.5)'] });
+    assert.equal(expanded.invalid.unchanged, true);
+    assert.equal(expanded.invalid.writes, 0);
+    assert.match(expanded.invalid.notice, /Invalid color at position 2/);
+    assert.equal(expanded.failedSave.unchanged, true);
+    assert.match(expanded.failedSave.notice, /Disk full/);
+    assert.deepEqual(expanded.seed, { text: 'oklch(60% 0.2 30 / 0.5)', count: 19,
+      color: 'oklch(60% 0.2 30 / 0.5)' });
+    assert.deepEqual(expanded.draft, { count: 19, color: 'oklch(60% 0.2 30 / 0.5)' });
+    assert.deepEqual(expanded.reuse, { count: 19, assignment: 18, color: 'rgba(1, 2, 3, 0.5)' });
+    assert.deepEqual(expanded.alphaDraft, { count: 19, color: 'rgba(1, 2, 3, 0.5)' });
+    assert.deepEqual(expanded.alphaCommit, { count: 20, assignment: 19,
+      color: 'rgb(1 2 3 / 50.01%)', shared: 'rgba(1, 2, 3, 0.5)' });
+  });
+  test(`${path}: failed profile switch and newer drafts remain consistent`, options, () => {
+    const { failedProfile, palette, custom } = results[path].races;
+    assert.equal(failedProfile.selected, 'light');
+    assert.equal(failedProfile.committed, 'light');
+    assert.match(failedProfile.notice, /Disk full/);
+    assert.equal(palette.saved, '#334455');
+    assert.equal(palette.draft, '#667788');
+    assert.deepEqual(palette.swatch, { color: '#334455', unset: false });
+    assert.match(palette.description, /All settings assigned/);
+    assert.equal(custom.saved, '#334455');
+    assert.equal(custom.draft, '#667788');
+    assert.match(custom.label, /Custom: #667788/);
+    assert.deepEqual(results[path].races.pendingSwitch, {
+      before: { selected: 'light', disabled: true, committed: 'light' },
+      rebuilt: { selected: 'light', disabled: true, committed: 'light' },
+      after: { selected: 'dark', disabled: false, committed: 'dark' },
+      lightAssignment: 0, darkAssignment: null,
+    });
+    assert.deepEqual(results[path].races.overlappingProfiles, {
+      afterOldFailure: { value: 'light', disabled: true }, selected: 'dark', disabled: false, committed: 'dark',
+    });
+    assert.deepEqual(results[path].races.rebuiltProfile, { selected: 'dark', committed: 'dark' });
+    assert.deepEqual(results[path].races.failedPicker, { saved: '#334455', picker: '#abcdef', draft: '#abcdef',
+      swatch: { color: '#334455', unset: false }, notice: 'Unable to set color: Picker save failed', retry: '#abcdef' });
+    assert.equal(results[path].races.assignmentDraft.assignment, 0);
+    assert.equal(results[path].races.assignmentDraft.draft, '#aabbcc');
+    assert.match(results[path].races.assignmentDraft.label, /Custom: #aabbcc/);
+    assert.equal(results[path].races.resetDraft.assignment, null);
+    assert.equal(results[path].races.resetDraft.draft, '#ddeeff');
+    assert.match(results[path].races.resetDraft.label, /Custom: #ddeeff/);
+  });
+  test(`${path}: palette CSV and JSON file inputs populate import controls`, options, () => {
+    const { files } = results[path].races;
+    assert.deepEqual(files.csv, { format: 'csv', text: '#010203, rgba(1, 2, 3, 0.5)' });
+    assert.deepEqual(files.append, ['#010203', 'rgba(1, 2, 3, 0.5)']);
+    assert.deepEqual(files.json, { format: 'json', text: '["#abcdef", "#123456"]' });
+    assert.deepEqual(files.replace, ['#abcdef', '#123456']);
+    assert.equal(files.invalid.unchanged, true);
+    assert.match(files.invalid.notice, /Invalid color/);
+    assert.deepEqual(files.newerDraft, { format: 'json', text: '["#654321"]' });
+    assert.deepEqual(files.newerFile, { format: 'json', text: '["#fedcba"]' });
+    assert.ok(results[path].races.largeSettingsFile.size > 1024 * 1024);
+    assert.equal(results[path].races.largeSettingsFile.colors, 110000);
+    assert.equal(results[path].races.largeSettingsFile.last, '#abcdef');
+    assert.match(results[path].races.largeSettingsFile.notice, /success/i);
+    assert.deepEqual(results[path].races.settingsExport, { download: 'theme-basics-settings.json',
+      attached: false, activeDocument: true, blob: true });
   });
   test(`${path}: mode switching and Base16 refresh preserve assignment`, options, () => {
     assert.equal(results[path].dark.mode, 'dark');

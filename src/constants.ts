@@ -77,7 +77,7 @@ export const DEFAULT_PROFILE: DefaultThemeStyleTunerProfile = {
 };
 
 export const DEFAULT_SETTINGS: DefaultThemeStyleTunerSettings = {
-  version: 3,
+  version: 4,
   palettes: { light: Array<string>(16).fill(""), dark: Array<string>(16).fill("") },
   colorAssignments: { light: {}, dark: {} },
   uiProfile: "light",

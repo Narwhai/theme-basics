@@ -8,8 +8,8 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "lint": "eslint .",
-    "test": "node --test tests/regressions.test.mjs",
-    "test:obsidian": "node --test tests/colors.test.mjs",
+    "test": "node --test --test-skip-pattern=\"real Obsidian CSS parser\" tests/regressions.test.mjs tests/palette-import.test.mjs tests/css-color-safety.test.mjs",
+    "test:obsidian": "node --test --test-concurrency=1 tests/colors.test.mjs tests/css-color-safety.test.mjs",
     "test:obsidian:ui": "node --test tests/palette-ui.test.mjs"
   },
   "keywords": [

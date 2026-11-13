@@ -9,6 +9,7 @@ import {
   Setting,
   SliderComponent,
   SuggestModal,
+  TextComponent,
 } from "obsidian";
 
 import {
@@ -21,7 +22,6 @@ import {
   COLOR_OPTIONS_BY_KEY,
   HEADING_DEFAULTS,
   HEADING_LEVELS,
-  PALETTE_SIZE,
   PROFILE_LABELS,
   TYPOGRAPHY_COLOR_OPTIONS,
   TYPOGRAPHY_OPTIONS,
@@ -76,7 +76,7 @@ class PaletteChoiceModal extends SuggestModal<PaletteChoice> {
   }
 }
 
-function addColorSwatch(container: HTMLElement, color: string): void {
+function addColorSwatch(container: HTMLElement, color: string): HTMLElement {
   const swatch = container.createSpan({ cls: "theme-basics-color-swatch" });
   swatch.setAttribute("aria-hidden", "true");
   const safeColor = sanitizeCssValue(color);
@@ -85,6 +85,7 @@ function addColorSwatch(container: HTMLElement, color: string): void {
   } else {
     swatch.addClass("is-unset");
   }
+  return swatch;
 }
 
 /**
@@ -106,6 +107,11 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   /** Cached Base16 YAML text – lives on the instance so it survives re-renders. */
   private base16Yaml = "";
+  private paletteList = "";
+  private paletteListFormat: "csv" | "json" | "" = "";
+  private paletteListRevision = 0;
+  private profileSelectionRevision = 0;
+  private profileSwitchesInFlight = 0;
   private activeColorModal: PaletteChoiceModal | null = null;
   private colorControlRefreshers = new Set<() => void>();
   /** Unset custom choices are transient UI state, not stored color values. */
@@ -113,6 +119,15 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     light: new Set(),
     dark: new Set(),
   };
+  private readonly customDrafts: Record<ProfileMode, Map<string, string>> = {
+    light: new Map(),
+    dark: new Map(),
+  };
+  private readonly customDraftRevisions: Record<ProfileMode, Map<string, number>> = {
+    light: new Map(),
+    dark: new Map(),
+  };
+  private nextCustomDraftRevision = 0;
   private legacyPalettePage = false;
 
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
@@ -130,13 +145,38 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   clearPendingCustomValue(mode: ProfileMode, key: string): void {
     this.pendingCustom[mode].delete(key);
+    this.customDrafts[mode].delete(key);
+    this.customDraftRevisions[mode].delete(key);
+  }
+
+  getPendingCustomRevision(mode: ProfileMode, key: string): number | undefined {
+    return this.customDraftRevisions[mode].get(key);
+  }
+
+  clearPendingCustomValueIfUnchanged(mode: ProfileMode, key: string, revision: number | undefined): void {
+    if (this.getPendingCustomRevision(mode, key) === revision) this.clearPendingCustomValue(mode, key);
+  }
+
+  getPendingCustomRevisions(mode: ProfileMode): ReadonlyMap<string, number> {
+    return new Map(this.customDraftRevisions[mode]);
+  }
+
+  clearPendingCustomRevisions(mode: ProfileMode, revisions: ReadonlyMap<string, number>): void {
+    for (const [key, revision] of revisions) this.clearPendingCustomValueIfUnchanged(mode, key, revision);
   }
 
   clearPendingCustom(mode?: ProfileMode): void {
-    if (mode) this.pendingCustom[mode].clear();
-    else {
+    if (mode) {
+      this.pendingCustom[mode].clear();
+      this.customDrafts[mode].clear();
+      this.customDraftRevisions[mode].clear();
+    } else {
       this.pendingCustom.light.clear();
       this.pendingCustom.dark.clear();
+      this.customDrafts.light.clear();
+      this.customDrafts.dark.clear();
+      this.customDraftRevisions.light.clear();
+      this.customDraftRevisions.dark.clear();
     }
   }
 
@@ -252,7 +292,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       {
         type: "page",
         name: "Color palette",
-        desc: "Edit the palette and import a Base16 theme.",
+        desc: "Edit the palette or import colors.",
         items: this.palettePageDefinitions(editedMode, token),
       },
 
@@ -365,7 +405,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       (setting) => this.configureResetAllRow(setting, token)
     );
 
-    this.addRow(containerEl, "Color palette", "Edit the palette and import a Base16 theme.", (setting) => {
+    this.addRow(containerEl, "Color palette", "Edit the palette or import colors.", (setting) => {
       setting.addButton((button) => button.setButtonText("Open").setIcon("lucide-chevron-right").onClick(() => {
         this.navigateLegacyPalettePage(true, token);
       }));
@@ -514,10 +554,19 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     this.addRow(containerEl, "Profile to edit", "Choose whether you are editing the light or dark profile.",
       (setting) => this.configureProfileRow(setting, mode, token));
     const paletteSection = this.createSection(containerEl, "Colors", this.paletteDescription(mode));
-    for (let index = 0; index < PALETTE_SIZE; index++) {
+    for (let index = 0; index < this.plugin.settings.palettes[mode].length; index++) {
       this.addRow(paletteSection, `Color ${index + 1}`, this.paletteSlotDescription(mode, index),
         (setting) => this.configurePaletteSetting(setting, mode, index, token));
     }
+    this.addRow(containerEl, "Add palette color", "Add another editable color slot.",
+      (setting) => this.configureAddPaletteRow(setting, mode, token));
+    const listSection = this.createSection(containerEl, "Import color list", this.paletteListDescription(mode));
+    this.addRow(listSection, "Color list format", "Choose CSV or a JSON array of color strings.",
+      (setting) => this.configurePaletteListFormat(setting, token));
+    this.addRow(listSection, "Color list", "Paste colors or load a CSV or JSON file.",
+      (setting) => this.configurePaletteListInput(setting, token));
+    this.addRow(listSection, "Import colors", this.paletteListDescription(mode),
+      (setting) => this.configurePaletteListActions(setting, mode, token));
     const base16Section = this.createSection(containerEl, "Import Base16 theme", this.base16Description(mode));
     this.addRow(base16Section, "Base16 YAML",
       "Paste the full text of a Base16 .yaml file below. " +
@@ -633,8 +682,32 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         }),
       },
       this.sectionGroup("Colors", this.paletteDescription(mode),
-        Array.from({ length: PALETTE_SIZE }, (_, index) => this.paletteDef(mode, index, token))
+        this.plugin.settings.palettes[mode].map((_, index) => this.paletteDef(mode, index, token))
       ),
+      {
+        name: "Add palette color",
+        desc: "Add another editable color slot.",
+        render: this.renderRow(token, (setting, rowToken) => {
+          this.configureAddPaletteRow(setting, mode, rowToken);
+        }),
+      },
+      this.sectionGroup("Import color list", this.paletteListDescription(mode), [
+        {
+          name: "Color list format",
+          desc: "Choose CSV or a JSON array of color strings.",
+          render: this.renderRow(token, (setting, rowToken) => this.configurePaletteListFormat(setting, rowToken)),
+        },
+        {
+          name: "Color list",
+          desc: "Paste colors or load a CSV or JSON file.",
+          render: this.renderRow(token, (setting, rowToken) => this.configurePaletteListInput(setting, rowToken)),
+        },
+        {
+          name: "Import colors",
+          desc: this.paletteListDescription(mode),
+          render: this.renderRow(token, (setting, rowToken) => this.configurePaletteListActions(setting, mode, rowToken)),
+        },
+      ]),
       this.sectionGroup("Import Base16 theme", this.base16Description(mode), [
         {
           name: "Base16 YAML",
@@ -657,7 +730,13 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private paletteDescription(mode: ProfileMode): string {
     return `Edit the ${PROFILE_LABELS[mode]} palette, then select its colors in the main settings. ` +
-      "An unset palette color inherits the theme until you set it. Color 1 corresponds to base00; Color 16 to base0F.";
+      "An unset palette color inherits the theme until you set it. Color 1 corresponds to base00; Color 16 to base0F. " +
+      "Enter any supported CSS color or use the picker; add more colors below.";
+  }
+
+  private paletteListDescription(mode: ProfileMode): string {
+    return `Import colors into the ${PROFILE_LABELS[mode]} palette. Append adds new slots; ` +
+      "replace updates slots by position while retaining remaining colors and assignments.";
   }
 
   private base16Description(mode: ProfileMode): string {
@@ -681,29 +760,159 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
   }
 
+  private configureAddPaletteRow(setting: Setting, mode: ProfileMode, token: DisplayToken): void {
+    setting.addButton((button) => button.setButtonText("Add color").onClick(async () => {
+      if (this.isStale(token)) return;
+      try {
+        await this.plugin.addPaletteSlot(mode);
+        if (!this.isStale(token)) this.refreshDisplayPreserveScroll();
+      } catch (error) {
+        new Notice(`Unable to add color: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
+  }
+
+  private configurePaletteListFormat(setting: Setting, token: DisplayToken): void {
+    setting.addDropdown((dropdown) => dropdown
+      .addOption("", "Select a format")
+      .addOption("csv", "CSV")
+      .addOption("json", "JSON")
+      .setValue(this.paletteListFormat)
+      .onChange((value) => {
+        if (!this.isStale(token) && (value === "" || value === "csv" || value === "json")) {
+          this.paletteListFormat = value;
+          this.paletteListRevision++;
+        }
+      }));
+  }
+
+  private configurePaletteListInput(setting: Setting, token: DisplayToken): void {
+    setting.addTextArea((textarea) => {
+      textarea.setPlaceholder("Paste a CSV color list or JSON array.").setValue(this.paletteList)
+        .onChange((value) => {
+          if (!this.isStale(token)) {
+            this.paletteList = value;
+            this.paletteListRevision++;
+          }
+        });
+      textarea.inputEl.rows = 7;
+      textarea.inputEl.addClass("theme-basics-base16-textarea");
+    });
+    setting.addButton((button) => button.setButtonText("Load file").onClick(() => {
+      if (this.isStale(token)) return;
+      const revision = ++this.paletteListRevision;
+      // The factory creates in the main document; adopt into the active popout if needed.
+      const input = activeDocument.adoptNode(createEl("input", { type: "file" }));
+      input.accept = ".csv,.json,text/csv,application/json";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file || this.isStale(token) || revision !== this.paletteListRevision) return;
+        try {
+          const contents = await file.text();
+          if (this.isStale(token) || revision !== this.paletteListRevision) return;
+          this.paletteList = contents;
+          if (/\.csv$/i.test(file.name)) this.paletteListFormat = "csv";
+          else if (/\.json$/i.test(file.name)) this.paletteListFormat = "json";
+          this.refreshDisplayPreserveScroll();
+        } catch (error) {
+          if (!this.isStale(token) && revision === this.paletteListRevision) {
+            new Notice(`Unable to read color list: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      };
+      input.click();
+    }));
+  }
+
+  private configurePaletteListActions(setting: Setting, mode: ProfileMode, token: DisplayToken): void {
+    const apply = async (operation: "append" | "replace"): Promise<void> => {
+      if (this.isStale(token)) return;
+      if (!this.paletteListFormat) {
+        new Notice("Choose CSV or JSON before importing colors.");
+        return;
+      }
+      try {
+        const count = await this.plugin.importPaletteColors(mode, this.paletteList, this.paletteListFormat, operation);
+        new Notice(`Imported ${count} colors to the ${PROFILE_LABELS[mode]} palette.`);
+        if (!this.isStale(token)) this.refreshDisplayPreserveScroll();
+      } catch (error) {
+        new Notice(`Unable to import colors: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    setting.addButton((button) => button.setButtonText("Append colors").onClick(() => apply("append")));
+    setting.addButton((button) => button.setButtonText("Replace by position").onClick(() => apply("replace")));
+  }
+
   private configurePaletteSetting(setting: Setting, mode: ProfileMode, index: number, token: DisplayToken): void {
     let picker: ColorComponent | null = null;
-    const current = this.plugin.settings.palettes[mode][index];
+    let text: TextComponent | null = null;
+    let current = this.plugin.settings.palettes[mode][index] ?? "";
+    let draft = current;
+    let edited = false;
+    let syncing = false;
+    let updateSequence = 0;
+    const swatch = addColorSwatch(setting.controlEl, current);
     setting.setDesc(this.paletteSlotDescription(mode, index));
-    const saveColor = async (value: string): Promise<void> => {
+    const saveColor = async (value: string, syncPicker: boolean): Promise<void> => {
       if (this.isStale(token)) return;
-      await this.plugin.setPaletteColor(mode, index, value);
-      if (this.isStale(token)) return;
-      setting.setDesc(this.paletteSlotDescription(mode, index));
-      this.refreshColorControls();
+      const sequence = ++updateSequence;
+      try {
+        await this.plugin.setPaletteColor(mode, index, value);
+        if (this.isStale(token)) return;
+        current = this.plugin.settings.palettes[mode][index] ?? "";
+        swatch.removeClass("is-unset");
+        swatch.setCssProps({ "--theme-basics-swatch-color": current });
+        setting.setDesc(this.paletteSlotDescription(mode, index));
+        this.refreshColorControls();
+        // A newer text draft must not be replaced by this completed save.
+        if (sequence !== updateSequence) return;
+        draft = current;
+        edited = false;
+        syncing = true;
+        try {
+          text?.setValue(current);
+          if (syncPicker) {
+            const hex = this.plugin.styleManager.tryToPickerHex(current);
+            if (hex && picker && picker.getValue().toLowerCase() !== hex.toLowerCase()) picker.setValue(hex);
+          }
+        } finally { syncing = false; }
+      } catch (error) {
+        new Notice(`Unable to set color: ${error instanceof Error ? error.message : String(error)}`);
+      }
     };
+    setting.addText((component) => {
+      text = component;
+      component.setPlaceholder("CSS color").setValue(current).onChange((value) => {
+        if (syncing || this.isStale(token)) return;
+        draft = value;
+        edited = true;
+        updateSequence++;
+      });
+      component.inputEl.addClass("theme-basics-palette-text");
+      component.inputEl.setAttribute("aria-label", `CSS color for Color ${index + 1}`);
+    });
     setting.addColorPicker((component) => {
       picker = component;
-      if (current) component.setValue(current);
-      component.onChange(saveColor);
+      const hex = current ? this.plugin.styleManager.tryToPickerHex(current) : null;
+      if (hex) component.setValue(hex);
+      component.onChange(async (value) => {
+        if (syncing || this.isStale(token)) return;
+        // Keep an attempted picker value as a retryable draft if persistence fails.
+        draft = value;
+        edited = true;
+        syncing = true;
+        try { text?.setValue(value); }
+        finally { syncing = false; }
+        await saveColor(value, false);
+      });
+      const input = setting.controlEl.querySelector<HTMLInputElement>("input[type=color]");
+      if (!input) throw new Error("Palette color picker is unavailable.");
+      input.setAttribute("aria-label", `Picker for Color ${index + 1}`);
     });
-    // An empty native color input shows a browser-provided preview. "Set" allows
-    // explicitly choosing that exact color even if it never emits a change event.
-    if (!current) {
-      setting.addButton((button) => button.setButtonText("Set").onClick(async () => {
-        if (picker) await saveColor(picker.getValue());
-      }));
-    }
+    setting.addButton((button) => button.setButtonText("Set").onClick(async () => {
+      if (!draft.trim() && !current && !edited && picker) await saveColor(picker.getValue(), true);
+      else await saveColor(draft, true);
+    }));
   }
 
   private colorDef(mode: ProfileMode, option: ColorOption, token: DisplayToken): SettingGroupItem {
@@ -787,19 +996,36 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private configureProfileRow(setting: Setting, editedMode: ProfileMode, token: DisplayToken): void {
     setting.addDropdown((dropdown: DropdownComponent) => {
+      let syncing = false;
       dropdown
         .addOption("light", "Light")
         .addOption("dark", "Dark")
         .setValue(editedMode)
+        .setDisabled(this.profileSwitchesInFlight > 0)
         .onChange(async (value) => {
-          if (this.isStale(token)) return;
-          if ((value !== "light" && value !== "dark") || value === this.plugin.getEditedProfileMode()) {
-            return;
+          if (syncing || this.isStale(token)) return;
+          if (value !== "light" && value !== "dark") return;
+          // The visible rows still edit editedMode until the write commits.
+          // Keep the dropdown aligned with them and prevent another user switch.
+          const revision = ++this.profileSelectionRevision;
+          this.profileSwitchesInFlight++;
+          syncing = true;
+          try {
+            dropdown.setValue(editedMode);
+            dropdown.setDisabled(true);
+          } finally { syncing = false; }
+          try {
+            await this.plugin.setEditedProfileMode(value);
+          } catch (error) {
+            if (revision === this.profileSelectionRevision) {
+              new Notice(`Unable to change profile: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          } finally {
+            this.profileSwitchesInFlight--;
+            // Refresh even after a stale row is torn down: a committed switch
+            // must re-render handlers for the profile shown in the new dropdown.
+            this.refreshDisplayPreserveScroll();
           }
-
-          await this.plugin.setEditedProfileMode(value);
-          if (this.isStale(token)) return;
-          this.refreshDisplayPreserveScroll();
         });
     });
   }
@@ -912,7 +1138,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     );
   }
 
-  /** Palette selection preserves old literal colors until explicitly changed. */
+  /** Palette selection preserves old literal colors until an explicit custom commit. */
   private configureColorSetting(
     setting: Setting,
     mode: ProfileMode,
@@ -923,26 +1149,29 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     let refreshSelection = (): void => {};
     let refreshCustomPicker = (): void => {};
     const isPending = (): boolean => this.pendingCustom[mode].has(option.key);
-    const setPending = (pending: boolean): void => {
-      if (pending) this.pendingCustom[mode].add(option.key);
-      else this.clearPendingCustomValue(mode, option.key);
+    const draft = (): string => this.customDrafts[mode].get(option.key) ?? this.plugin.getResolvedProfile(mode)[option.key];
+    const setDraft = (value: string): void => {
+      this.pendingCustom[mode].add(option.key);
+      this.customDrafts[mode].set(option.key, value);
+      this.customDraftRevisions[mode].set(option.key, ++this.nextCustomDraftRevision);
     };
     let rowModal: PaletteChoiceModal | null = null;
     const makeChoices = (): PaletteChoice[] => {
       const existing = this.plugin.getProfile(mode)[option.key];
       const assignment = this.plugin.settings.colorAssignments[mode][option.key];
-      const isCustom = assignment === undefined && (Boolean(existing) || isPending());
+      const isCustom = isPending() || (assignment === undefined && Boolean(existing));
       const choices: PaletteChoice[] = [{
         value: "", label: "Inherit theme default", color: "",
-        selected: assignment === undefined && !existing && !isPending(),
+        selected: !isPending() && assignment === undefined && !existing,
       }, {
-        value: "custom", label: "Custom", color: isCustom ? existing : "", selected: isCustom,
+        value: "custom", label: "Custom", color: isCustom ? draft() : "", selected: isCustom,
       }];
-      for (let index = 0; index < PALETTE_SIZE; index++) {
-        const color = this.plugin.settings.palettes[mode][index] ?? "";
+      const palette = this.plugin.settings.palettes[mode];
+      for (let index = 0; index < palette.length; index++) {
+        const color = palette[index] ?? "";
         choices.push({
           value: String(index), label: `Color ${index + 1}${color ? "" : " (not set)"}`,
-          color, selected: assignment === index,
+          color, selected: !isPending() && assignment === index,
         });
       }
       return choices;
@@ -952,10 +1181,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       button.setIcon("lucide-rotate-ccw").setTooltip("Reset to theme default")
         .onClick(async () => {
           if (this.isStale(token)) return;
-          setPending(false);
           await this.plugin.resetProfileValue(mode, option.key);
-          if (this.isStale(token)) return;
-          refreshSelection();
+          if (!this.isStale(token)) refreshSelection();
         });
     }).addButton((button) => {
       const element = button.buttonEl;
@@ -984,33 +1211,19 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         const modal = new PaletteChoiceModal(this.app, option.description, makeChoices(), (choice) => {
           if (this.isStale(token)) return;
           const apply = async (): Promise<void> => {
-            if (choice.value === "custom") {
-              const assignment = this.plugin.settings.colorAssignments[mode][option.key];
-              if (assignment !== undefined) {
-                // Capture the slot before removing its reference. An unset slot
-                // stays unset rather than committing the browser's picker color.
-                const color = this.plugin.getResolvedProfile(mode)[option.key];
-                if (color) {
-                  setPending(false);
-                  await this.plugin.setProfileValue(mode, option.key, color);
-                } else {
-                  // resetProfileValue clears stale pending state synchronously;
-                  // record this new choice before awaiting its persistence.
-                  const reset = this.plugin.resetProfileValue(mode, option.key);
-                  setPending(true);
-                  await reset;
-                }
+            try {
+              if (choice.value === "custom") {
+                // Reselecting Custom is a newer intent even if its text is unchanged.
+                setDraft(isPending() ? draft() : this.plugin.getResolvedProfile(mode)[option.key]);
+              } else if (choice.value === "") {
+                await this.plugin.resetProfileValue(mode, option.key);
               } else {
-                // Existing literals, including modern CSS and alpha, must not be
-                // converted to picker hex until the user actually changes them.
-                setPending(!this.plugin.getProfile(mode)[option.key]);
+                await this.plugin.setColorAssignment(mode, option.key, Number(choice.value));
               }
-            } else {
-              setPending(false);
-              if (choice.value === "") await this.plugin.resetProfileValue(mode, option.key);
-              else await this.plugin.setColorAssignment(mode, option.key, Number(choice.value));
+              if (!this.isStale(token)) refreshSelection();
+            } catch (error) {
+              new Notice(`Unable to change color: ${error instanceof Error ? error.message : String(error)}`);
             }
-            if (!this.isStale(token)) refreshSelection();
           };
           void apply();
         }, (closed) => {
@@ -1027,64 +1240,66 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
     const customContainer = setting.controlEl.createDiv({ cls: "theme-basics-custom-color" });
     let picker: ColorComponent | null = null;
-    let setButton: ButtonComponent | null = null;
-    let syncingPicker = false;
+    let text: TextComponent | null = null;
+    let syncing = false;
     refreshCustomPicker = () => {
       const existing = this.plugin.getProfile(mode)[option.key];
       const assignment = this.plugin.settings.colorAssignments[mode][option.key];
-      const isCustom = assignment === undefined && (Boolean(existing) || isPending());
+      const isCustom = isPending() || (assignment === undefined && Boolean(existing));
       if (!isCustom) {
         customContainer.empty();
         picker = null;
-        setButton = null;
+        text = null;
         return;
       }
-      if (!picker) {
+      if (!text) {
+        const currentText = new TextComponent(customContainer).setPlaceholder("CSS color");
+        text = currentText;
+        currentText.inputEl.addClass("theme-basics-palette-text");
+        currentText.inputEl.setAttribute("aria-label", `Custom CSS color for ${option.description}`);
+        currentText.onChange((value) => {
+          if (syncing || text !== currentText || this.isStale(token)) return;
+          setDraft(value);
+          refreshSelection();
+        });
         const currentPicker = new ColorComponent(customContainer);
         picker = currentPicker;
         const input = customContainer.querySelector<HTMLInputElement>("input[type=color]");
         if (!input) throw new Error("Custom color picker is unavailable.");
         input.setAttribute("aria-label", `Custom color for ${option.description}`);
-        currentPicker.onChange(async (color) => {
-          if (syncingPicker || picker !== currentPicker || this.isStale(token) ||
-              this.plugin.settings.colorAssignments[mode][option.key] !== undefined ||
-              (!isPending() && !this.plugin.getProfile(mode)[option.key])) return;
-          setPending(false);
-          await this.plugin.setProfileValue(mode, option.key, color);
-          if (!this.isStale(token)) refreshSelection();
+        currentPicker.onChange((value) => {
+          if (syncing || picker !== currentPicker || this.isStale(token)) return;
+          setDraft(value);
+          refreshSelection();
         });
+        new ButtonComponent(customContainer).setButtonText("Set")
+          .setTooltip("Add or reuse this color in the palette")
+          .onClick(async () => {
+            if (picker !== currentPicker || this.isStale(token)) return;
+            // Explicit Set also permits the picker’s displayed black on an empty draft.
+            const value = draft().trim() || currentPicker.getValue();
+            const revision = this.customDraftRevisions[mode].get(option.key);
+            try {
+              await this.plugin.commitCustomColor(mode, option.key, value);
+              if (this.customDraftRevisions[mode].get(option.key) === revision) {
+                this.clearPendingCustomValue(mode, option.key);
+              }
+              // A new palette slot may rebuild this row while the write is pending.
+              // Refresh the current controls, not a detached control from that row.
+              this.refreshColorControls();
+            } catch (error) {
+              new Notice(`Unable to set custom color: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          });
       }
-      const hex = existing ? this.plugin.styleManager.tryToPickerHex(existing) : null;
-      const input = customContainer.querySelector<HTMLInputElement>("input[type=color]");
-      if (!input) throw new Error("Custom color picker is unavailable.");
-      input.setAttribute("title", existing && !hex
-        ? "The current color cannot be displayed in the picker; choosing a color will replace it."
-        : "Choose a custom color");
-      if (hex && picker.getValue() !== hex) {
-        syncingPicker = true;
-        try { picker.setValue(hex); }
-        finally { syncingPicker = false; }
-      }
-      // A picker represents colors as opaque hex, so even a successfully
-      // resolved legacy value may differ from what it displays (e.g. rgba).
-      // Let users explicitly apply that preview without rewriting on render.
-      const needsExplicitSet = !existing || existing !== picker.getValue();
-      if (needsExplicitSet && !setButton) {
-        const currentButton = new ButtonComponent(customContainer).setButtonText("Set").setTooltip(
-          "Use the color currently shown by the picker"
-        );
-        setButton = currentButton;
-        currentButton.onClick(async () => {
-          if (setButton !== currentButton || this.isStale(token) || !picker ||
-              this.plugin.settings.colorAssignments[mode][option.key] !== undefined ||
-              (!isPending() && !this.plugin.getProfile(mode)[option.key])) return;
-          setPending(false);
-          await this.plugin.setProfileValue(mode, option.key, picker.getValue());
-          if (!this.isStale(token)) refreshSelection();
-        });
-      } else if (!needsExplicitSet && setButton) {
-        setButton.buttonEl.remove();
-        setButton = null;
+      const value = draft();
+      const hex = value ? this.plugin.styleManager.tryToPickerHex(value) : null;
+      syncing = true;
+      try {
+        if (text.getValue() !== value) text.setValue(value);
+        if (hex && picker && picker.getValue().toLowerCase() !== hex.toLowerCase()) picker.setValue(hex);
+      } finally {
+        syncing = false;
       }
     };
     refreshCustomPicker();

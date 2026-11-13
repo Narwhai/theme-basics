@@ -1,7 +1,7 @@
 import { debounce } from "obsidian";
 
 import { BODY_CLASS, CSS_VARIABLE_NAMES, CSS_VARIABLES } from "./constants";
-import { clamp, formatNumber, rgbToHsl, sanitizeCssValue } from "./utils";
+import { clamp, formatNumber, hasClosedCssTokens, rgbToHsl, sanitizeCssValue } from "./utils";
 
 import type DefaultThemeStyleTunerPlugin from "./main";
 import type { ProfileMode, RgbColor, StringProfileKey } from "./types";
@@ -183,6 +183,69 @@ export class StyleManager {
     return clamp(value, min, max);
   }
 
+  /** Match literal colors without merging context-dependent or different-alpha values. */
+  colorsMatch(first: string, second: string): boolean {
+    const a = first.trim();
+    const b = second.trim();
+    if (a === b) return true;
+    const hex = (value: string): string | null => {
+      const match = value.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+      const digits = match?.[1];
+      if (!digits) return null;
+      const expanded = digits.length <= 4 ? [...digits].map((digit) => digit + digit).join("") : digits;
+      return (expanded.length === 6 ? expanded + "ff" : expanded).toLowerCase();
+    };
+    const aHex = hex(a);
+    const bHex = hex(b);
+    if (aHex && bHex) return aHex === bHex;
+    const authoredAlpha = (value: string, normalizedHex: string | null): number | null => {
+      if (normalizedHex) return Number.parseInt(normalizedHex.slice(6), 16) / 255;
+      if (/^transparent$/i.test(value)) return 0;
+      if (/^[a-z]+$/i.test(value)) return 1;
+      const match = value.match(/^(rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\((.*)\)$/is);
+      const name = match?.[1]?.toLowerCase();
+      const body = match?.[2];
+      if (!name || body === undefined || /[()]/.test(body)) return null;
+      let token: string | undefined;
+      if (body.includes("/")) {
+        const parts = body.split("/");
+        token = parts[parts.length - 1]?.trim();
+      } else if (["rgb", "rgba", "hsl", "hsla"].includes(name) && body.split(",").length === 4) {
+        const parts = body.split(",");
+        token = parts[parts.length - 1]?.trim();
+      } else return 1;
+      if (!token || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?$/i.test(token)) return null;
+      const number = Number.parseFloat(token);
+      return Number.isFinite(number) ? number / (token.endsWith("%") ? 100 : 1) : null;
+    };
+    // These expressions depend on their element, theme, or environment; resolving
+    // them in a probe must not make unrelated palette entries share a slot.
+    const contextual = /(?:\b(?:var|env|light-dark|contrast-color)\s*\(|\b(?:currentcolor|inherit|initial|unset|revert|revert-layer|canvas|canvastext|linktext|visitedtext|activetext|buttonface|buttontext|buttonborder|field|fieldtext|highlight|highlighttext|selecteditem|selecteditemtext|mark|marktext|graytext|accentcolor|accentcolortext)\b)/i;
+    if (this.disposed || typeof CSS === "undefined" || !CSS.supports("color", a) || !CSS.supports("color", b)) return false;
+    // Whitespace adjacent to commas is insignificant in valid color-mix
+    // expressions. Avoid rewriting strings, escapes, or comments, where that
+    // whitespace could instead be part of a literal or token.
+    const mixKey = (value: string): string | null =>
+      /^color-mix\(/i.test(value) && !/["'\\]|\/\*/.test(value)
+        ? value.replace(/[ \t\r\n\f]*,[ \t\r\n\f]*/g, ",") : null;
+    const firstMix = mixKey(a);
+    const secondMix = mixKey(b);
+    if (firstMix !== null && firstMix === secondMix) return true;
+    if (contextual.test(a) || contextual.test(b)) return false;
+    const firstAlpha = authoredAlpha(a, aHex);
+    const secondAlpha = authoredAlpha(b, bHex);
+    // Chromium can round alpha in computed CSS; compare the authored numeric
+    // alpha separately so distinct transparency values cannot be merged.
+    if (firstAlpha === null || secondAlpha === null || firstAlpha !== secondAlpha) return false;
+    const probe = this.getColorProbe();
+    const view = this.getDocumentWindow(probe.ownerDocument);
+    probe.setCssProps({ color: a });
+    const firstColor = view.getComputedStyle(probe).color;
+    probe.setCssProps({ color: b });
+    const secondColor = view.getComputedStyle(probe).color;
+    return firstColor === secondColor;
+  }
+
   tryToPickerHex(value: string): string | null {
     const sanitizedValue = sanitizeCssValue(value);
     if (!sanitizedValue) {
@@ -276,18 +339,21 @@ export class StyleManager {
       "",
     ];
 
-    const addBlock = (selector: string, props: Record<string, string>): void => {
+    const addBlock = (mode: ProfileMode, props: Record<string, string>): void => {
       const entries = Object.entries(props);
       if (entries.length === 0) return;
-      lines.push(`${selector} {`);
+      lines.push(`body.theme-${mode} {`);
       for (const [prop, value] of entries) {
+        if (!hasClosedCssTokens(value)) {
+          throw new Error(`Cannot export ${mode} profile: ${prop} contains unbalanced CSS tokens. Edit or reset this setting.`);
+        }
         lines.push(`  ${prop}: ${value};`);
       }
       lines.push(`}`, ``);
     };
 
-    addBlock("body.theme-light", this.buildCssPropertiesForMode("light"));
-    addBlock("body.theme-dark", this.buildCssPropertiesForMode("dark"));
+    addBlock("light", this.buildCssPropertiesForMode("light"));
+    addBlock("dark", this.buildCssPropertiesForMode("dark"));
 
     // If both profiles were empty, note that in the file
     if (lines.length === 4) {

@@ -30,6 +30,18 @@ function rendererChecks(harness) {
       "color(display-p3 1 0 0)", "color-mix(in oklch, red 10%, transparent)",
       "color(srgb 0.1 0.2 0.3 / 0.1)", "not-a-color", "255, 0, 0",
     ].map((color) => [color, manager.tryToPickerHex(color)]));
+    const matches = {
+      opaque: manager.colorsMatch("#ff0000", "rgb(255 0 0)"),
+      alpha: manager.colorsMatch("rgba(255, 0, 0, 0.5)", "rgb(255 0 0 / 50%)"),
+      alphaDifferent: manager.colorsMatch("rgba(255, 0, 0, 0.5)", "rgb(255 0 0 / 50.01%)"),
+      hexAlphaDifferent: manager.colorsMatch("#ff000080", "rgba(255, 0, 0, 0.5)"),
+      distinctVariables: manager.colorsMatch("var(--first)", "var(--second)"),
+      sameVariable: manager.colorsMatch("var(--first)", "var(--first)"),
+      mixedCommaSpacing: manager.colorsMatch("color-mix(in srgb, red, blue)", "color-mix(in srgb,red,blue)"),
+      mixedSameContext: manager.colorsMatch("color-mix(in srgb, var(--first), blue)", "color-mix(in srgb,var(--first),blue)"),
+      mixedDifferentContext: manager.colorsMatch("color-mix(in srgb, var(--first), blue)", "color-mix(in srgb,var(--second),blue)"),
+      mixedDifferentAlpha: manager.colorsMatch("color-mix(in srgb, rgb(1 2 3 / 0.5), blue)", "color-mix(in srgb,rgb(1 2 3 / 0.5001),blue)"),
+    };
     profiles.light.linkColor = "oklch(60% 0.2 30)";
     profiles.light.tagBackground = "color-mix(in oklch, red 10%, transparent)";
     const properties = manager.buildCssPropertiesForMode("light");
@@ -121,7 +133,7 @@ function rendererChecks(harness) {
     try { failure.manager.refreshThemeDefaults(); } catch { captureFailed = true; }
 
     return {
-      colors, properties, hover, snippet, firstVariable, secondVariable,
+      colors, matches, properties, hover, snippet, firstVariable, secondVariable,
       interactive: { before: interactiveBefore, applied: interactiveApplied, reset: interactiveReset },
       formField: { before: formBefore, applied: formApplied, reset: formReset },
       ownership: { afterEmpty, afterOverride, afterRefresh, afterReset, afterCleanup,
@@ -161,6 +173,14 @@ for (const [color, hex] of [
 ]) {
   test(`picker resolves ${color}`, () => assert.equal(result.colors[color], hex));
 }
+
+test("matching equivalent CSS colors preserves authored alpha and context", () => {
+  assert.deepEqual(result.matches, {
+    opaque: true, alpha: true, alphaDifferent: false, hexAlphaDifferent: false,
+    distinctVariables: false, sameVariable: true,
+    mixedCommaSpacing: true, mixedSameContext: true, mixedDifferentContext: false, mixedDifferentAlpha: false,
+  });
+});
 
 test("modern colors remain intact in overrides and snippet exports", () => {
   assert.equal(result.properties["--link-color"], "oklch(60% 0.2 30)");

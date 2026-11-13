@@ -66,27 +66,48 @@ A plugin that allows you to customize basic appearance properties such as backgr
 
 ## Color palettes
 
-Open **Color palette** from the main Theme Basics settings to edit the palette or
-import a Base16 theme. Light and dark profiles each have their own 16-slot palette.
-Define colors with the palette pickers or paste a Base16 YAML scheme; Color 1 corresponds to base00 and
-Color 16 to base0F. Assign any color setting to a slot to share that color with
-other settings. Each color selector opens a searchable chooser with labeled
-swatches and marks the current choice. Editing a slot updates all assignments to
-it. Unset slots inherit the theme until a color is supplied, and each setting can
-also inherit directly. Select **Custom** to pick an independent color for a single
-setting. If a populated palette slot was selected, the picker starts with that
-slot's color; subsequent palette edits and imports do not change the custom color.
-If no color is set, choose one or press **Set** to use the picker preview. Until
-then the Custom selection remains pending while the settings tab is open, including
-when changing profiles or importing a Base16 palette. Existing CSS colors,
-including transparency, are preserved until you choose a replacement in
-the picker; choosing a replacement sets an opaque color. When the picker preview
-differs from an existing value, press **Set** to apply the displayed opaque color.
+Open **Color palette** from the main Theme Basics settings. Light and dark
+profiles have separate palettes, each starting with 16 slots. Use **Add color**
+to add further slots. Enter a complete CSS color such as `#abc`, `#11223380`,
+`rgba(1, 2, 3, 0.5)`, or `oklch(60% 0.2 30)`, then press **Set**, or use the
+color picker. The picker supplies opaque hex colors; merely displaying a picker
+never converts an existing CSS value. Palette swatches preview the actual color.
 
-Base16 import replaces only supplied palette colors, leaving assignments, legacy
-color overrides, and missing slots untouched. Existing custom colors stay in place
-until explicitly reassigned or reset. Copying a profile includes its palette and
-assignments; resetting a profile clears them along with its other overrides.
+Assign any color setting to a numbered slot in its searchable color chooser.
+Editing a slot updates every setting assigned to it; unset slots inherit the
+theme. Each setting can also inherit directly. Select **Custom** to draft a color
+starting from the current selection, then press **Set** to add it to the palette
+and assign the resulting slot. If the color already exists, its existing slot is
+reused; later palette edits affect every setting using that slot. Draft changes
+are not applied until **Set**.
+Existing legacy custom CSS values, including transparency, are preserved until
+explicitly changed or reset.
+
+### Importing colors
+
+On the palette page, paste a list or load a CSV/JSON file, select its format,
+then choose **Append colors** or **Replace by position**. JSON must be an array
+of color strings, for example:
+
+```json
+["#112233", "rgba(1, 2, 3, 0.5)", "oklch(60% 0.2 30)"]
+```
+
+CSV accepts colors separated by commas or newlines. Values containing commas
+may be quoted, for example `#112233,"rgba(1, 2, 3, 0.5)"`; unquoted CSS
+functions with nested commas are also accepted. Invalid colors reject the
+entire import without changing the palette.
+
+**Append** adds slots after all existing slots. **Replace by position** changes
+only slots represented in the list, leaving later slots and all assignments in
+place. Colors assigned to changed slots update accordingly. There is no fixed
+palette-size limit.
+
+Base16 YAML import remains available: Color 1 corresponds to `base00` and
+Color 16 to `base0F`. It replaces only supplied first-16 colors, leaving other
+slots, assignments, and legacy color overrides untouched. Copying a profile
+includes its palette and assignments; resetting a profile clears them along with
+its other overrides.
 
 ## Color compatibility
 
@@ -97,10 +118,12 @@ assignments; resetting a profile clears them along with its other overrides.
 ## Development checks
 
 ```sh
+# Node-only regression, import, and CSS color safety tests.
 npm test
 npm run lint
 npm run build
 # Requires the Obsidian CLI and the named vault to be open.
+# The renderer and CSS color safety files run serially.
 OBSIDIAN_TEST_VAULT=Dev-Vault npm run test:obsidian
 # UI tests also require Theme Basics and the Quick Switcher core plugin enabled
 # in that vault (settings need not be open). This is a test-only prerequisite.

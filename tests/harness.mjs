@@ -26,14 +26,27 @@ export async function bundlePlugin() {
 // It never loads/replaces the installed plugin or writes to the vault.
 export function createHarness(bundle) {
   const pending = new Map();
+  const notices = [];
   const api = {
+    normalizePath(path) { return path; },
     debounce(callback) {
       const key = Symbol();
       const run = () => { pending.set(key, callback); };
       run.cancel = () => { pending.delete(key); };
       return run;
     },
-    Notice: class {},
+    Notice: class { constructor(message) { notices.push(message); } },
+    TextComponent: class {
+      constructor(container) {
+        this.inputEl = { value: '', addClass() {}, setAttribute() {} };
+        container.textInput = this.inputEl;
+        container.textComponent = this;
+      }
+      setPlaceholder() { return this; }
+      getValue() { return this.inputEl.value; }
+      setValue(value) { this.inputEl.value = value; this.change?.(value); return this; }
+      onChange(callback) { this.change = callback; return this; }
+    },
     ColorComponent: class {
       constructor(container) {
         this.input = { value: '#000000', attributes: {}, setAttribute(key, value) { this.attributes[key] = value; } };
@@ -44,8 +57,13 @@ export function createHarness(bundle) {
       onChange(callback) { this.change = callback; return this; }
     },
     ButtonComponent: class {
-      constructor(container) { this.buttonEl = { remove() {} }; container.button = this; }
-      setButtonText() { return this; }
+      constructor(container) {
+        this.buttonEl = { remove() {} };
+        container.buttons ??= [];
+        container.buttons.push(this);
+        container.button = this;
+      }
+      setButtonText(value) { this.text = value; return this; }
       setTooltip() { return this; }
       onClick(callback) { this.click = callback; return this; }
     },
@@ -83,6 +101,7 @@ export function createHarness(bundle) {
   return {
     ...module.exports,
     SuggestModal: api.SuggestModal,
+    notices,
     flush() {
       for (const [key, callback] of [...pending]) {
         pending.delete(key);

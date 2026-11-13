@@ -1,9 +1,10 @@
 import { debounce, normalizePath, Notice, Plugin } from "obsidian";
 
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, isColorProfileKey, PALETTE_SIZE, PROFILE_KEYS, PROFILE_LABELS } from "./constants";
+import { parsePaletteColorList } from "./palette-import";
 import { DefaultThemeStyleTunerSettingTab } from "./settings-tab";
 import { StyleManager } from "./style-manager";
-import { cloneProfile, isObject, sanitizeCssValue } from "./utils";
+import { cloneProfile, isObject, isValidCssColor, sanitizeCssValue } from "./utils";
 
 import type {
   DefaultThemeStyleTunerProfile,
@@ -15,6 +16,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
   override settings!: DefaultThemeStyleTunerSettings;
   readonly styleManager = new StyleManager(this);
   private settingsTab: DefaultThemeStyleTunerSettingTab | null = null;
+  private settingsQueue: Promise<void> = Promise.resolve();
+  private settingsImportRevision = 0;
 
   private readonly debouncedCssChange = debounce(() => {
     this.styleManager.refreshThemeDefaults();
@@ -67,92 +70,126 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
         throw new Error("Settings were created by a newer version of Theme Basics.");
       }
       // Do not silently erase malformed palette data when rewriting settings.
-      if (loadedSettings.version === 3) this.validateSettingsImport(loadedSettings);
+      if (loadedSettings.version === 3 || loadedSettings.version === 4) this.validateSettingsImport(loadedSettings);
     }
     this.settings = this.normalizeSettings(loadedSettings);
     await this.saveData(this.settings);
   }
 
+  /** Serialize each write and compute its snapshot only after preceding writes settle. */
+  private enqueueSettings<Result>(
+    build: (current: DefaultThemeStyleTunerSettings) => { next: DefaultThemeStyleTunerSettings | null; result: Result }
+  ): Promise<Result> {
+    const operation = this.settingsQueue.then(async () => {
+      const { next, result } = build(this.settings);
+      if (next === null) return result;
+      await this.saveData(next);
+      this.settings = next;
+      this.styleManager.applyStyles();
+      return result;
+    });
+    // Keep the queue usable after a failed write; callers still receive the rejection.
+    this.settingsQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
-    this.styleManager.applyStyles();
+    await this.enqueueSettings((current) => ({ next: { ...current }, result: undefined }));
   }
 
   async setEditedProfileMode(mode: ProfileMode): Promise<void> {
-    this.settings.uiProfile = mode;
-    await this.saveData(this.settings);
+    await this.enqueueSettings((current) => ({ next: { ...current, uiProfile: mode }, result: undefined }));
   }
 
-  async setProfileValue<Key extends keyof DefaultThemeStyleTunerProfile>(
+  async setProfileValue(
     mode: ProfileMode,
-    key: Key,
-    value: DefaultThemeStyleTunerProfile[Key]
+    key: keyof DefaultThemeStyleTunerProfile,
+    value: string
   ): Promise<void> {
-    const profile = this.getProfile(mode);
-    profile[key] = sanitizeCssValue(typeof value === "string" ? value : "") as DefaultThemeStyleTunerProfile[Key];
-    delete this.settings.colorAssignments[mode][key];
-    this.settingsTab?.clearPendingCustomValue(mode, key);
-    await this.saveSettings();
+    const sanitized = sanitizeCssValue(value);
+    const tab = this.settingsTab;
+    const revision = tab?.getPendingCustomRevision(mode, key);
+    await this.enqueueSettings((current) => {
+      const profile = cloneProfile(current.profiles[mode]);
+      profile[key] = sanitized;
+      const assignments = { ...current.colorAssignments[mode] };
+      delete assignments[key];
+      return { next: {
+        ...current,
+        profiles: { ...current.profiles, [mode]: profile },
+        colorAssignments: { ...current.colorAssignments, [mode]: assignments },
+      }, result: undefined };
+    });
+    tab?.clearPendingCustomValueIfUnchanged(mode, key, revision);
   }
 
-  async resetProfileValue<Key extends keyof DefaultThemeStyleTunerProfile>(
-    mode: ProfileMode,
-    key: Key
-  ): Promise<void> {
-    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string>;
-    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
-    profile[key] = defaultProfile[key];
-    delete this.settings.colorAssignments[mode][key];
-    this.settingsTab?.clearPendingCustomValue(mode, key);
-    await this.saveSettings();
+  async resetProfileValue(mode: ProfileMode, key: keyof DefaultThemeStyleTunerProfile): Promise<void> {
+    await this.resetProfileValues(mode, [key]);
   }
 
   async resetProfileValues(
     mode: ProfileMode,
     keys: ReadonlyArray<keyof DefaultThemeStyleTunerProfile>
   ): Promise<void> {
-    const profile = this.getProfile(mode) as Record<keyof DefaultThemeStyleTunerProfile, string>;
-    const defaultProfile = DEFAULT_PROFILE as Record<keyof DefaultThemeStyleTunerProfile, string>;
-
-    for (const key of keys) {
-      profile[key] = defaultProfile[key];
-      delete this.settings.colorAssignments[mode][key];
-      this.settingsTab?.clearPendingCustomValue(mode, key);
+    const tab = this.settingsTab;
+    const revisions = tab?.getPendingCustomRevisions(mode);
+    await this.enqueueSettings((current) => {
+      const profile = cloneProfile(current.profiles[mode]);
+      const assignments = { ...current.colorAssignments[mode] };
+      for (const key of keys) {
+        profile[key] = DEFAULT_PROFILE[key];
+        delete assignments[key];
+      }
+      return { next: {
+        ...current,
+        profiles: { ...current.profiles, [mode]: profile },
+        colorAssignments: { ...current.colorAssignments, [mode]: assignments },
+      }, result: undefined };
+    });
+    if (tab && revisions) {
+      for (const key of keys) tab.clearPendingCustomValueIfUnchanged(mode, key, revisions.get(key));
     }
-
-    await this.saveSettings();
   }
 
   async copyProfile(sourceMode: ProfileMode, targetMode: ProfileMode): Promise<void> {
-    this.settings.profiles[targetMode] = cloneProfile(this.settings.profiles[sourceMode]);
-    this.settings.palettes[targetMode] = [...this.settings.palettes[sourceMode]];
-    this.settings.colorAssignments[targetMode] = { ...this.settings.colorAssignments[sourceMode] };
-    this.settingsTab?.clearPendingCustom(targetMode);
-    await this.saveSettings();
+    const tab = this.settingsTab;
+    const revisions = tab?.getPendingCustomRevisions(targetMode);
+    await this.enqueueSettings((current) => ({ next: {
+      ...current,
+      profiles: { ...current.profiles, [targetMode]: cloneProfile(current.profiles[sourceMode]) },
+      palettes: { ...current.palettes, [targetMode]: [...current.palettes[sourceMode]] },
+      colorAssignments: { ...current.colorAssignments, [targetMode]: { ...current.colorAssignments[sourceMode] } },
+    }, result: undefined }));
+    if (tab && revisions) tab.clearPendingCustomRevisions(targetMode, revisions);
   }
 
   async resetProfile(mode: ProfileMode): Promise<void> {
-    this.settings.profiles[mode] = { ...DEFAULT_PROFILE };
-    this.settings.palettes[mode] = Array<string>(PALETTE_SIZE).fill("");
-    this.settings.colorAssignments[mode] = {};
-    this.settingsTab?.clearPendingCustom(mode);
-    await this.saveSettings();
+    const tab = this.settingsTab;
+    const revisions = tab?.getPendingCustomRevisions(mode);
+    await this.enqueueSettings((current) => ({ next: {
+      ...current,
+      profiles: { ...current.profiles, [mode]: { ...DEFAULT_PROFILE } },
+      palettes: { ...current.palettes, [mode]: Array<string>(PALETTE_SIZE).fill("") },
+      colorAssignments: { ...current.colorAssignments, [mode]: {} },
+    }, result: undefined }));
+    if (tab && revisions) tab.clearPendingCustomRevisions(mode, revisions);
   }
 
   async resetAllSettings(): Promise<void> {
-    this.settings = {
+    const tab = this.settingsTab;
+    const lightRevisions = tab?.getPendingCustomRevisions("light");
+    const darkRevisions = tab?.getPendingCustomRevisions("dark");
+    await this.enqueueSettings((current) => ({ next: {
       ...DEFAULT_SETTINGS,
-      uiProfile: this.getEditedProfileMode(),
-      profiles: {
-        light: { ...DEFAULT_PROFILE },
-        dark: { ...DEFAULT_PROFILE },
-      },
+      uiProfile: current.uiProfile,
+      profiles: { light: { ...DEFAULT_PROFILE }, dark: { ...DEFAULT_PROFILE } },
       palettes: { light: Array<string>(PALETTE_SIZE).fill(""), dark: Array<string>(PALETTE_SIZE).fill("") },
       colorAssignments: { light: {}, dark: {} },
-    };
-    this.settingsTab?.clearPendingCustom();
-
-    await this.saveSettings();
+    }, result: undefined }));
+    if (tab && lightRevisions && darkRevisions) {
+      tab.clearPendingCustomRevisions("light", lightRevisions);
+      tab.clearPendingCustomRevisions("dark", darkRevisions);
+    }
     new Notice("All overrides reset.");
   }
 
@@ -160,7 +197,8 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
     const json = JSON.stringify(this.settings, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const anchor = activeDocument.createEl("a");
+    // The factory creates in the main document; adopt into the active popout if needed.
+    const anchor = activeDocument.adoptNode(createEl("a"));
     anchor.href = url;
     anchor.download = "theme-basics-settings.json";
     anchor.click();
@@ -168,42 +206,64 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
   }
 
   importSettingsJson(): void {
-    const input = activeDocument.createEl("input");
-    input.type = "file";
+    // The factory creates in the main document; adopt into the active popout if needed.
+    const input = activeDocument.adoptNode(createEl("input", { type: "file" }));
     input.accept = ".json,application/json";
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const MAX_IMPORT_SIZE = 1024 * 1024; // 1 MB
-      if (file.size > MAX_IMPORT_SIZE) {
-        new Notice("Import failed: file exceeds 1mb size limit.");
-        return;
-      }
+      const revision = ++this.settingsImportRevision;
+      let importStarted = false;
       try {
-        await this.importSettings(await file.text());
-        new Notice("Settings imported successfully.");
+        const json = await file.text();
+        // A newer selected file takes precedence, but cancelling another dialog does not.
+        if (revision !== this.settingsImportRevision) return;
+        importStarted = true;
+        const imported = await this.importSettingsIfCurrent(json, () => revision === this.settingsImportRevision);
+        if (imported) new Notice("Settings imported successfully.");
       } catch (error) {
-        new Notice(`Failed to import settings: ${error instanceof Error ? error.message : String(error)}`);
+        // Ignore errors from reads superseded before import began, not failed saves.
+        if (importStarted || revision === this.settingsImportRevision) {
+          new Notice(`Failed to import settings: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     };
     input.click();
   }
 
   async importSettings(json: string): Promise<void> {
+    await this.importSettingsIfCurrent(json, () => true);
+  }
+
+  private async importSettingsIfCurrent(json: string, isCurrent: () => boolean): Promise<boolean> {
     const parsed: unknown = JSON.parse(json);
     this.validateSettingsImport(parsed);
-    const settings = this.normalizeSettings(parsed);
-    // Do not replace the current profiles until validation and persistence succeed.
-    await this.saveData(settings);
-    this.settings = settings;
-    this.settingsTab?.clearPendingCustom();
-    this.styleManager.applyStyles();
+    const tab = this.settingsTab;
+    const lightRevisions = tab?.getPendingCustomRevisions("light");
+    const darkRevisions = tab?.getPendingCustomRevisions("dark");
+    // Recheck after earlier writes settle, before making or persisting the snapshot.
+    const imported = await this.enqueueSettings(() => {
+      if (!isCurrent()) return { next: null, result: false };
+      return { next: this.normalizeSettings(parsed), result: true };
+    });
+    if (!imported) return false;
+    if (tab && lightRevisions && darkRevisions) {
+      tab.clearPendingCustomRevisions("light", lightRevisions);
+      tab.clearPendingCustomRevisions("dark", darkRevisions);
+    }
     // Definitions are cached even while the settings tab is closed (1.13+).
     this.settingsTab?.refreshDisplayPreserveScroll();
+    return true;
   }
 
   async exportCssSnippet(): Promise<void> {
-    const css = this.styleManager.generateSnippetCss();
+    let css: string;
+    try {
+      css = this.styleManager.generateSnippetCss();
+    } catch (error) {
+      new Notice(`Failed to generate CSS snippet: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     const snippetsDir = normalizePath(`${this.app.vault.configDir}/snippets`);
     const snippetPath = normalizePath(`${snippetsDir}/theme-basics.css`);
     try {
@@ -233,31 +293,95 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       return { success: false, count: 0 };
     }
 
-    for (const [key, color] of Object.entries(colors)) {
-      const index = Number.parseInt(key.slice(4), 16);
-      this.settings.palettes[mode][index] = color;
-    }
-
-    await this.saveSettings();
+    await this.editPalette(mode, (palette) => {
+      for (const [key, color] of Object.entries(colors)) {
+        const index = Number.parseInt(key.slice(4), 16);
+        palette[index] = color;
+      }
+    });
     return { success: true, count };
   }
 
+  private async editPalette(mode: ProfileMode, edit: (palette: string[]) => void): Promise<void> {
+    const changedLength = await this.enqueueSettings((current) => {
+      const palette = [...current.palettes[mode]];
+      edit(palette);
+      return { next: { ...current, palettes: { ...current.palettes, [mode]: palette } },
+        result: palette.length !== current.palettes[mode].length };
+    });
+    // Native declarative page definitions are cached, even if the user left the
+    // row while persistence was pending. Rebuild them whenever slots were added.
+    if (changedLength) this.settingsTab?.refreshDisplayPreserveScroll();
+  }
+
+  async addPaletteSlot(mode: ProfileMode): Promise<void> {
+    await this.editPalette(mode, (palette) => { palette.push(""); });
+  }
+
   async setPaletteColor(mode: ProfileMode, index: number, color: string): Promise<void> {
-    if (!Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE || !/^#[0-9a-f]{6}$/i.test(color)) {
+    if (!Number.isInteger(index) || index < 0 || !isValidCssColor(color)) {
       throw new Error("Invalid palette color or slot.");
     }
-    this.settings.palettes[mode][index] = color.toLowerCase();
-    await this.saveSettings();
+    await this.editPalette(mode, (palette) => {
+      if (index >= palette.length) throw new Error("Invalid palette color or slot.");
+      palette[index] = color.trim();
+    });
+  }
+
+  async importPaletteColors(
+    mode: ProfileMode,
+    input: string,
+    format: "csv" | "json",
+    operation: "append" | "replace"
+  ): Promise<number> {
+    const colors = parsePaletteColorList(input, format, isValidCssColor);
+    if (operation !== "append" && operation !== "replace") throw new Error("Invalid palette import operation.");
+    await this.editPalette(mode, (palette) => {
+      if (operation === "append") {
+        for (const color of colors) palette.push(color);
+      } else {
+        colors.forEach((color, index) => { palette[index] = color; });
+      }
+    });
+    return colors.length;
   }
 
   async setColorAssignment(mode: ProfileMode, key: string, index: number): Promise<void> {
-    if (!isColorProfileKey(key) || !Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE) {
-      throw new Error("Invalid color assignment.");
-    }
-    this.settings.colorAssignments[mode][key] = index;
-    this.settings.profiles[mode][key] = "";
-    this.settingsTab?.clearPendingCustomValue(mode, key);
-    await this.saveSettings();
+    if (!isColorProfileKey(key) || !Number.isInteger(index) || index < 0) throw new Error("Invalid color assignment.");
+    const tab = this.settingsTab;
+    const revision = tab?.getPendingCustomRevision(mode, key);
+    await this.enqueueSettings((current) => {
+      if (index >= current.palettes[mode].length) throw new Error("Invalid color assignment.");
+      return { next: {
+        ...current,
+        profiles: { ...current.profiles, [mode]: { ...current.profiles[mode], [key]: "" } },
+        colorAssignments: { ...current.colorAssignments, [mode]: { ...current.colorAssignments[mode], [key]: index } },
+      }, result: undefined };
+    });
+    tab?.clearPendingCustomValueIfUnchanged(mode, key, revision);
+  }
+
+  /** Commit one custom draft to an existing matching slot or one new palette entry. */
+  async commitCustomColor(mode: ProfileMode, key: string, color: string): Promise<number> {
+    const value = color.trim();
+    if (!isColorProfileKey(key) || !isValidCssColor(value)) throw new Error("Invalid custom color.");
+    const result = await this.enqueueSettings((current) => {
+      const palette = [...current.palettes[mode]];
+      let slot = palette.findIndex((candidate) => candidate !== "" && this.styleManager.colorsMatch(candidate, value));
+      const added = slot < 0;
+      if (added) {
+        slot = palette.length;
+        palette.push(value);
+      }
+      return { next: {
+        ...current,
+        palettes: { ...current.palettes, [mode]: palette },
+        profiles: { ...current.profiles, [mode]: { ...current.profiles[mode], [key]: "" } },
+        colorAssignments: { ...current.colorAssignments, [mode]: { ...current.colorAssignments[mode], [key]: slot } },
+      }, result: { slot, added } };
+    });
+    if (result.added) this.settingsTab?.refreshDisplayPreserveScroll();
+    return result.slot;
   }
 
   getResolvedProfile(mode: ProfileMode): DefaultThemeStyleTunerProfile {
@@ -344,7 +468,7 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       }
     };
     if ("version" in loaded || "profiles" in loaded) {
-      if ((loaded.version !== 2 && loaded.version !== 3) || !isObject(loaded.profiles)) {
+      if ((loaded.version !== 2 && loaded.version !== 3 && loaded.version !== 4) || !isObject(loaded.profiles)) {
         throw new Error("Unsupported settings version or missing profiles.");
       }
       if (loaded.uiProfile !== "light" && loaded.uiProfile !== "dark") {
@@ -352,19 +476,21 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
       }
       validateProfile(loaded.profiles.light);
       validateProfile(loaded.profiles.dark);
-      if (loaded.version === 3) {
+      if (loaded.version === 3 || loaded.version === 4) {
         if (!isObject(loaded.palettes) || !isObject(loaded.colorAssignments)) {
           throw new Error("Missing palettes or color assignments.");
         }
         for (const mode of ["light", "dark"]) {
           const palette = loaded.palettes[mode];
           const assignments = loaded.colorAssignments[mode];
-          if (!Array.isArray(palette) || palette.length !== PALETTE_SIZE ||
-              palette.some((color: unknown) => typeof color !== "string" || (color !== "" && !/^#[0-9a-f]{6}$/i.test(color)))) {
-            throw new Error("Each palette must contain 16 valid colors or empty slots.");
+          if (!Array.isArray(palette) || palette.length < PALETTE_SIZE ||
+              (loaded.version === 3 && palette.length !== PALETTE_SIZE) ||
+              palette.some((color: unknown) => typeof color !== "string" || (color !== "" &&
+                (loaded.version === 3 ? !/^#[0-9a-f]{6}$/i.test(color) : !isValidCssColor(color))))) {
+            throw new Error("Each palette must contain at least 16 valid colors or empty slots.");
           }
           if (!isObject(assignments) || Object.entries(assignments).some(([key, index]) =>
-            !isColorProfileKey(key) || typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= PALETTE_SIZE
+            !isColorProfileKey(key) || typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= palette.length
           )) {
             throw new Error("Invalid color assignments.");
           }
@@ -388,38 +514,40 @@ export default class DefaultThemeStyleTunerPlugin extends Plugin {
 
     const profiles = isObject(loaded) && isObject(loaded.profiles) ? loaded.profiles : null;
     const legacy = isObject(loaded) && PROFILE_KEYS.some((key) => key in loaded) ? loaded : {};
-    const palettes = isObject(loaded) && loaded.version === 3 && isObject(loaded.palettes) ? loaded.palettes : {};
-    const assignments = isObject(loaded) && loaded.version === 3 && isObject(loaded.colorAssignments) ? loaded.colorAssignments : {};
+    const paletteVersion = isObject(loaded) && (loaded.version === 3 || loaded.version === 4) ? loaded.version : null;
+    const palettes = paletteVersion && isObject(loaded) && isObject(loaded.palettes) ? loaded.palettes : {};
+    const assignments = paletteVersion && isObject(loaded) && isObject(loaded.colorAssignments) ? loaded.colorAssignments : {};
+    const lightPalette = this.normalizePalette(palettes.light, paletteVersion);
+    const darkPalette = this.normalizePalette(palettes.dark, paletteVersion);
     return {
-      version: 3,
+      version: 4,
       uiProfile: preferredProfile,
       profiles: {
         light: this.normalizeProfile(profiles ? profiles.light : legacy),
         dark: this.normalizeProfile(profiles ? profiles.dark : legacy),
       },
-      palettes: {
-        light: this.normalizePalette(palettes.light),
-        dark: this.normalizePalette(palettes.dark),
-      },
+      palettes: { light: lightPalette, dark: darkPalette },
       colorAssignments: {
-        light: this.normalizeAssignments(assignments.light),
-        dark: this.normalizeAssignments(assignments.dark),
+        light: this.normalizeAssignments(assignments.light, lightPalette.length),
+        dark: this.normalizeAssignments(assignments.dark, darkPalette.length),
       },
     };
   }
 
-  private normalizePalette(source: unknown): string[] {
-    return Array.from({ length: PALETTE_SIZE }, (_, index) => {
-      const color: unknown = Array.isArray(source) ? source[index] : undefined;
-      return typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "";
+  private normalizePalette(source: unknown, version: number | null): string[] {
+    if (!Array.isArray(source)) return Array<string>(PALETTE_SIZE).fill("");
+    const colors: unknown[] = source;
+    return colors.map((color) => {
+      if (typeof color !== "string") throw new Error("Invalid palette color.");
+      return version === 3 ? color.toLowerCase() : color;
     });
   }
 
-  private normalizeAssignments(source: unknown): Partial<Record<keyof DefaultThemeStyleTunerProfile, number>> {
+  private normalizeAssignments(source: unknown, paletteLength: number): Partial<Record<keyof DefaultThemeStyleTunerProfile, number>> {
     const result: Partial<Record<keyof DefaultThemeStyleTunerProfile, number>> = {};
     if (!isObject(source)) return result;
     for (const [key, index] of Object.entries(source)) {
-      if (isColorProfileKey(key) && typeof index === "number" && Number.isInteger(index) && index >= 0 && index < PALETTE_SIZE) {
+      if (isColorProfileKey(key) && typeof index === "number" && Number.isInteger(index) && index >= 0 && index < paletteLength) {
         result[key] = index;
       }
     }
