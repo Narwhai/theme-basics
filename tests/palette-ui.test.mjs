@@ -104,6 +104,40 @@ async function rendererChecks(bundle, styles) {
     stylesheet.textContent = styles;
     try {
       render();
+      // Reopening a hidden tab: the settings modal tears rows down, calls
+      // hide(), then renderTab() re-renders the cached definitions without a
+      // new getSettingDefinitions() call (or calls display() on legacy).
+      const opensChoices = async (button) => {
+        await click(button);
+        const opened = Boolean(tab.activeColorModal);
+        tab.activeColorModal?.close();
+        await tick();
+        return opened;
+      };
+      const teardown = (items) => {
+        for (const item of items ?? []) {
+          if (item.children) teardown(item.children);
+          const cleanup = item.cleanup;
+          item.cleanup = undefined;
+          cleanup?.();
+        }
+      };
+      const reopenTab = () => {
+        teardown(tab.renderedItems);
+        tab.renderedItems = [];
+        tab.hide();
+        if (typeof tab.renderTab === 'function') tab.renderTab();
+        else tab.display();
+      };
+      const reopen = { beforeHide: await opensChoices(selectButton(row('Primary background'))) };
+      const hiddenButton = selectButton(row('Primary background'));
+      reopenTab();
+      reopen.afterReopen = await opensChoices(selectButton(row('Primary background')));
+      reopen.hiddenButton = await opensChoices(hiddenButton);
+      reopenTab();
+      reopen.afterSecondReopen = await opensChoices(selectButton(row('Primary background')));
+      reopen.saves = saves;
+      render();
       const root = { hasPaletteLink: Boolean(row('Color palette')),
         pickers: content().querySelectorAll('input[type=color]').length,
         base16: Boolean(row('Base16 YAML')), profile: Boolean(row('Profile to edit')) };
@@ -166,7 +200,10 @@ async function rendererChecks(bundle, styles) {
       const page = { profile: Boolean(row('Profile to edit')), base16: Boolean(row('Base16 YAML')),
         rootSettingsVisible: Boolean(row('Primary background')), refreshers: tab.colorControlRefreshers.size,
         nativePage: path === 'legacy' ? null : host.pageStack.length, modalClosed: tab.activeColorModal === null,
-        staleRootAssignment: plugin.settings.colorAssignments.light.h1Color };
+        staleRootAssignment: plugin.settings.colorAssignments.light.h1Color,
+        // Section descriptions need top spacing on the subpage too (it renders outside the tab container).
+        sectionIntroPadding: [...content().querySelectorAll('.setting-items > .setting-item-heading:first-child')]
+          .map((el) => getComputedStyle(el).paddingTop) };
       await click(h1button);
       page.staleRootModalOpened = Boolean(tab.activeColorModal);
       for (const action of staleRootActions) await click(action);
@@ -890,7 +927,7 @@ async function rendererChecks(bundle, styles) {
         else delete activeDocument.createElement;
       }
 
-      results[path] = { root, page, stalePage, afterReset, afterAllReset, afterRepeat, afterPageHide, afterDispose, initial, legacy, legacyChoices, emptySlot,
+      results[path] = { reopen, root, page, stalePage, afterReset, afterAllReset, afterRepeat, afterPageHide, afterDispose, initial, legacy, legacyChoices, emptySlot,
         afterSet, afterEdit, options, afterSelect, afterUpdate, current, keyboard, afterInherit, dark, light,
         imported, importedChoices, modalAccessibility, afterHide, custom, pending, interactive, formField, expanded, races };
     } finally { host.clearPageStack(); tab.dispose(); colorResolver.cleanup(); hostEl.remove(); stylesheet.remove(); }
@@ -904,16 +941,19 @@ const output = execFileSync('obsidian', [`vault=${vault}`, 'eval', `code=${code}
 const lines = output.split('\n');
 const resultLine = lines.findLast((line) => line.startsWith('=> '));
 const diagnostics = lines.filter((line) => line !== resultLine);
-const unexpected = diagnostics.filter((line) => !/^\[error\] Theme Basics UI Test: duplicate setting key /.test(line));
-if (!resultLine || unexpected.length) throw new Error(`Obsidian renderer checks failed: ${output}`);
-if (diagnostics.length) console.warn(`Obsidian reported ${diagnostics.length} duplicate setting-key warnings in the fixture.`);
+// Duplicate setting keys make Obsidian's re-render reuse the wrong rows.
+if (!resultLine || diagnostics.length) throw new Error(`Obsidian renderer checks failed: ${output}`);
 const { results, supportsDeclarative } = JSON.parse(resultLine.slice(3));
 for (const path of ['declarative', 'legacy']) {
   const options = { skip: path === 'declarative' && !supportsDeclarative ? 'Obsidian has no declarative settings API' : false };
   test(`${path}: palette opens as a separate page and returns cleanly`, options, () => {
+    assert.deepEqual(results[path].reopen, { beforeHide: true, afterReopen: true, hiddenButton: false,
+      afterSecondReopen: true, saves: 0 });
     assert.deepEqual(results[path].root, { hasPaletteLink: true, pickers: 2, base16: false, profile: true });
     assert.deepEqual(results[path].page, { profile: true, base16: true, rootSettingsVisible: false, refreshers: 0,
       nativePage: path === 'legacy' ? null : 1, modalClosed: true, staleRootAssignment: 1,
+      // Legacy sections put the description in the heading row instead.
+      sectionIntroPadding: path === 'legacy' ? [] : ['24px', '24px', '24px'],
       staleRootModalOpened: false, staleRootActions: [] });
     assert.equal(results[path].stalePage.color, '#123456');
     assert.equal(results[path].stalePage.mode, 'light');

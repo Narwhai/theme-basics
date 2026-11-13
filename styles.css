@@ -16,7 +16,8 @@
   pointer-events: none;
 }
 
-.theme-basics-settings .setting-items > .setting-item-heading:first-child {
+/* Section groups also appear on native subpages outside .theme-basics-settings. */
+.theme-basics-section .setting-items > .setting-item-heading:first-child {
   padding-top: 1.5rem;
 }
 

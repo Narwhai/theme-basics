@@ -32,6 +32,8 @@ import type DefaultThemeStyleTunerPlugin from "./main";
 import type { SettingDefinitionItem, SettingGroupItem } from "obsidian";
 import type { ColorOption, HeadingLevel, ProfileMode, SliderOption } from "./types";
 
+const SECTION_CLASS = "theme-basics-section";
+
 interface PaletteChoice {
   value: string;
   label: string;
@@ -96,6 +98,12 @@ function addColorSwatch(container: HTMLElement, color: string): HTMLElement {
 interface DisplayToken {
   active: boolean;
   parent?: DisplayToken;
+  /**
+   * Visibility epoch at creation. Hiding the tab bumps the epoch so controls
+   * from the hidden page go stale, while cached declarative definitions stay
+   * valid: rows rendered from them after reopening get the new epoch.
+   */
+  visibility?: number;
 }
 
 export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
@@ -104,6 +112,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
    * Handlers compare their captured token against this to detect staleness.
    */
   private displayToken: DisplayToken = { active: true };
+  /** Incremented by hide(); see {@link DisplayToken.visibility}. */
+  private visibility = 0;
 
   /** Cached Base16 YAML text – lives on the instance so it survives re-renders. */
   private base16Yaml = "";
@@ -140,7 +150,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   dispose(): void {
     this.clearColorControls();
     this.clearPendingCustom();
-    this.displayToken = { active: true };
+    this.displayToken.active = false;
   }
 
   clearPendingCustomValue(mode: ProfileMode, key: string): void {
@@ -181,9 +191,13 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   }
 
   override hide(): void {
-    // On 1.13+ the base class tears down declaratively rendered rows; on
+    // On 1.13+ the settings modal tears down declaratively rendered rows; on
     // older versions hide() does nothing, so empty the container ourselves.
-    this.dispose();
+    // Do not replace the root token: Obsidian re-renders the cached
+    // definitions on reopen without calling getSettingDefinitions() again.
+    this.clearColorControls();
+    this.clearPendingCustom();
+    this.visibility++;
     this.legacyPalettePage = false;
     super.hide();
     this.containerEl.empty();
@@ -361,7 +375,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   override display(): void {
     // Mint a fresh token – any handler from a previous display() is now stale.
     this.clearColorControls();
-    const token: DisplayToken = { active: true };
+    // display() rebuilds on every open, so its root also expires on hide().
+    const token: DisplayToken = { active: true, visibility: this.visibility };
     this.displayToken = token;
 
     const { containerEl } = this;
@@ -592,10 +607,14 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   private isStale(token: DisplayToken): boolean {
     let current = token;
     while (current.parent) {
-      if (!current.active) return true;
+      if (!current.active || this.isHiddenSince(current)) return true;
       current = current.parent;
     }
-    return !current.active || current !== this.displayToken;
+    return !current.active || this.isHiddenSince(current) || current !== this.displayToken;
+  }
+
+  private isHiddenSince(token: DisplayToken): boolean {
+    return token.visibility !== undefined && token.visibility !== this.visibility;
   }
 
   /** Declarative pages may tear down rows without rebuilding the tab's definitions. */
@@ -604,7 +623,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     configure: (setting: Setting, rowToken: DisplayToken) => void | (() => void)
   ): (setting: Setting) => () => void {
     return (setting) => {
-      const rowToken: DisplayToken = { active: true, parent: token };
+      const rowToken: DisplayToken = { active: true, parent: token, visibility: this.visibility };
       const cleanup = configure(setting, rowToken);
       return () => {
         rowToken.active = false;
@@ -644,6 +663,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     return {
       type: "group",
       heading,
+      // Native subpages render outside the tab's container class.
+      cls: SECTION_CLASS,
       items: [this.sectionIntro(description), ...items],
     };
   }
@@ -950,14 +971,15 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     return {
       color: {
         key: `h${level}Color`,
-        name: "Color",
+        // Names key declarative rows and label search results, so they must be unique.
+        name: `H${level} color`,
         description: `Text color for H${level} headings.`,
         variableName: `--h${level}-color`,
       },
       sliders: [
         {
           key: `h${level}Size`,
-          name: "Size",
+          name: `H${level} size`,
           description: `Font size for H${level} headings.`,
           variableName: `--h${level}-size`,
           min: 0.8,
@@ -968,7 +990,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         },
         {
           key: `h${level}Weight`,
-          name: "Weight",
+          name: `H${level} weight`,
           description: `Font weight for H${level} headings.`,
           variableName: `--h${level}-weight`,
           min: 100,
@@ -979,7 +1001,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         },
         {
           key: `h${level}LineHeight`,
-          name: "Line height",
+          name: `H${level} line height`,
           description: `Line height for H${level} headings.`,
           variableName: `--h${level}-line-height`,
           min: 1,
@@ -1402,7 +1424,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   }
 
   private createSection(containerEl: HTMLElement, title: string, description: string): HTMLElement {
-    const groupEl = containerEl.createDiv("setting-group");
+    const groupEl = containerEl.createDiv({ cls: ["setting-group", SECTION_CLASS] });
     new Setting(groupEl).setName(title).setDesc(description).setHeading();
     return groupEl.createDiv("setting-items");
   }

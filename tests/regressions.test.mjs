@@ -1325,3 +1325,96 @@ test("palette CSV and JSON file inputs populate and validate before importing", 
   }
 });
 /* eslint-enable obsidianmd/prefer-active-doc */
+
+function profileDropdown() {
+  return {
+    addOption() { return this; }, setValue() { return this; }, setDisabled() { return this; },
+    onChange(callback) { this.change = callback; return this; },
+  };
+}
+
+test("cached declarative definitions stay interactive after the tab is hidden and reopened", async () => {
+  const { plugin, SettingsTab } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  plugin.settingsTab = tab;
+  tab.update();
+  const cached = tab.settingItems;
+  const firstOpen = profileDropdown();
+  const cleanup = cached[0].render({ addDropdown: (configure) => configure(firstOpen) });
+  // Obsidian tears rows down, hides the tab, then re-renders the same cached
+  // definitions on reopen without calling getSettingDefinitions() again.
+  cleanup();
+  tab.hide();
+  assert.equal(tab.settingItems, cached);
+  const reopened = profileDropdown();
+  cached[0].render({ addDropdown: (configure) => configure(reopened) });
+  await reopened.change("dark");
+  assert.equal(plugin.getEditedProfileMode(), "dark");
+});
+
+test("cached palette rows stay interactive across repeated hide and reopen cycles", async () => {
+  const { plugin, SettingsTab } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  plugin.settingsTab = tab;
+  tab.update();
+  for (const color of ["#111111", "#222222", "#333333"]) {
+    const picker = { setValue() { return this; }, onChange(callback) { this.change = callback; return this; } };
+    const cleanup = paletteGroup(tab.settingItems).items[1].render(paletteRow(picker));
+    await picker.change(color);
+    assert.equal(plugin.settings.palettes.light[0], color);
+    cleanup();
+    tab.hide();
+  }
+});
+
+test("controls rendered before hide stay stale even if their cleanup never ran", async () => {
+  const { plugin, SettingsTab, writes } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  plugin.settingsTab = tab;
+  tab.update();
+  const beforeHide = profileDropdown();
+  tab.settingItems[0].render({ addDropdown: (configure) => configure(beforeHide) });
+  tab.hide();
+  const afterReopen = profileDropdown();
+  tab.settingItems[0].render({ addDropdown: (configure) => configure(afterReopen) });
+  await beforeHide.change("dark");
+  assert.equal(plugin.getEditedProfileMode(), "light");
+  assert.equal(writes.length, 0);
+  await afterReopen.change("dark");
+  assert.equal(plugin.getEditedProfileMode(), "dark");
+});
+
+test("unloading the plugin invalidates rows rendered from cached definitions", async () => {
+  const { plugin, SettingsTab, writes } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  plugin.settingsTab = tab;
+  tab.update();
+  const cached = tab.settingItems;
+  const rendered = profileDropdown();
+  cached[0].render({ addDropdown: (configure) => configure(rendered) });
+  tab.dispose();
+  const afterDispose = profileDropdown();
+  cached[0].render({ addDropdown: (configure) => configure(afterDispose) });
+  await rendered.change("dark");
+  await afterDispose.change("dark");
+  assert.equal(plugin.getEditedProfileMode(), "light");
+  assert.equal(writes.length, 0);
+});
+
+test("declarative rows have unique keys within each group and page", () => {
+  const { plugin, SettingsTab } = fixture();
+  const tab = new SettingsTab(plugin.app, plugin);
+  // Mirrors Obsidian's row key: explicit id, control key, then name.
+  const rowKey = (item, index) => item.type === "page" ? `page:${item.id ?? item.name}`
+    : item.id ? `id:${item.id}` : item.control ? `ctrl:${item.control.key}` : item.name ? `name:${item.name}` : `item#${index}`;
+  const check = (items, path) => {
+    const rows = items.filter((item) => item.type !== "group" && item.type !== "list");
+    const keys = rows.map(rowKey);
+    assert.deepEqual(keys.filter((key, index) => keys.indexOf(key) !== index), [], `duplicate keys in ${path}`);
+    for (const item of items) {
+      if (item.type === "group" || item.type === "list") check(item.items ?? [], `${path} > ${item.heading}`);
+      if (item.type === "page") check(item.items ?? [], `${path} > ${item.name}`);
+    }
+  };
+  check(tab.getSettingDefinitions(), "root");
+});
