@@ -31,6 +31,16 @@ function paletteRow(picker, button) {
   };
 }
 
+function h1ColorDef(definitions) {
+  const page = definitions.find((item) => item.type === "page" && item.name === "Headings");
+  assert.ok(page);
+  const group = page.items.find((item) => item.heading === "H1");
+  assert.ok(group);
+  const def = group.items.find((item) => item.desc?.includes("Text color for H1 headings."));
+  assert.ok(def);
+  return def;
+}
+
 function paletteGroup(definitions) {
   const page = definitions.find((item) => item.name === "Color palette");
   assert.equal(page?.type, "page");
@@ -472,8 +482,7 @@ test("settings use neutral palette labels and preserve a legacy value until chan
   assert.equal(definitions.some((item) => item.heading === "Import Base16 theme"), false);
   assert.ok(page.items.some((item) => item.heading === "Import Base16 theme"));
   assert.deepEqual(palette.items.slice(1).map((item) => item.name), Array.from({ length: 16 }, (_, i) => `Color ${i + 1}`));
-  const headings = definitions.find((item) => item.heading === "Headings");
-  const h1 = headings.items.find((item) => item.desc?.includes("Text color for H1 headings."));
+  const h1 = h1ColorDef(definitions);
   const extra = {
     setIcon() { return this; }, setTooltip() { return this; }, setDisabled(value) { this.disabled = value; return this; },
     onClick(callback) { this.click = callback; return this; },
@@ -522,8 +531,7 @@ test("settings use neutral palette labels and preserve a legacy value until chan
   assert.equal(plugin.settings.colorAssignments.light.h1Color, 16);
   assert.equal(writes.length, 1);
   assert.equal(paletteGroup(tab.settingItems).items.length, 18, "new slot must be indexed in the declarative palette page");
-  const refreshedHeadings = tab.settingItems.find((item) => item.heading === "Headings");
-  const refreshedH1 = refreshedHeadings.items.find((item) => item.desc?.includes("Text color for H1 headings."));
+  const refreshedH1 = h1ColorDef(tab.settingItems);
   refreshedH1.render(row);
   button.click();
   const refreshedModal = SuggestModal.latest;
@@ -942,8 +950,7 @@ test("a newer Custom draft survives an earlier asynchronous commit and row rebui
       addExtraButton(configure) { configure(extra); return this; },
       addButton(configure) { configure(button); return this; } } };
   };
-  const h1 = (definitions) => definitions.find((item) => item.heading === "Headings").items
-    .find((item) => item.desc?.includes("Text color for H1 headings."));
+  const h1 = (definitions) => h1ColorDef(definitions);
   const first = makeRow();
   h1(tab.getSettingDefinitions()).render(first.row);
   first.container.textComponent.change("#223344");

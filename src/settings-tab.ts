@@ -29,10 +29,57 @@ import {
 import { formatNumber, sanitizeCssValue } from "./utils";
 
 import type DefaultThemeStyleTunerPlugin from "./main";
-import type { SettingDefinitionItem, SettingGroupItem } from "obsidian";
+import type { SettingDefinitionItem, SettingDefinitionPage, SettingGroupItem } from "obsidian";
 import type { ColorOption, HeadingLevel, ProfileMode, SliderOption } from "./types";
 
 const SECTION_CLASS = "theme-basics-section";
+const PALETTE_LIST_FORMAT_DESC = "Choose CSV or a JSON array of color strings. " +
+  "CSV example: #1e1e2e, #f38ba8, rgb(166, 227, 161). " +
+  "JSON example: [\"#1e1e2e\", \"#f38ba8\", \"rgb(166, 227, 161)\"].";
+const PALETTE_LIST_PLACEHOLDER = "CSV (commas or new lines):\n#1e1e2e, #f38ba8, rgb(166, 227, 161)\n\n" +
+  "JSON (array of strings):\n[\"#1e1e2e\", \"#f38ba8\", \"rgb(166, 227, 161)\"]";
+
+/** Settings sub-pages in root display order; both rendering paths build from this table. */
+type SettingsPageId = "palette" | "backgrounds" | "links" | "typography" | "headings" | "advanced" | "importExport";
+
+interface SettingsPage {
+  id: SettingsPageId;
+  name: string;
+  desc: string;
+  /** Whether the page starts with a "Profile to edit" row. */
+  profileRow: boolean;
+}
+
+const SETTINGS_PAGES: readonly SettingsPage[] = [
+  { id: "palette", name: "Color palette", desc: "Edit the palette or import colors.", profileRow: true },
+  { id: "backgrounds", name: "Backgrounds", desc: "App chrome, note surfaces, and editor background colors.", profileRow: true },
+  {
+    id: "links", name: "Links and emphasis", profileRow: true,
+    desc: "Internal links, external links, bold, italic, and highlighted text. Link hover colors are computed automatically.",
+  },
+  { id: "typography", name: "Typography", desc: "Base text size and line spacing for note content in both modes.", profileRow: true },
+  { id: "headings", name: "Headings", desc: "Per-level heading colors, sizes, weights, and line heights.", profileRow: true },
+  { id: "advanced", name: "Advanced", desc: "Additional default-theme note styling controls.", profileRow: true },
+  { id: "importExport", name: "Import / Export", desc: "Share your settings or generate a standalone CSS snippet.", profileRow: false },
+];
+
+const BACKGROUND_OPTIONS: ColorOption[] = [
+  COLOR_OPTIONS_BY_KEY.backgroundPrimary,
+  COLOR_OPTIONS_BY_KEY.backgroundSecondary,
+  COLOR_OPTIONS_BY_KEY.backgroundPrimaryAlt,
+  COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
+  COLOR_OPTIONS_BY_KEY.interactiveBackground,
+  COLOR_OPTIONS_BY_KEY.formFieldBackground,
+].filter((option): option is ColorOption => option !== undefined);
+
+const LINK_OPTIONS: ColorOption[] = [
+  COLOR_OPTIONS_BY_KEY.linkColor,
+  COLOR_OPTIONS_BY_KEY.externalLinkColor,
+  COLOR_OPTIONS_BY_KEY.unresolvedLinkColor,
+  COLOR_OPTIONS_BY_KEY.boldColor,
+  COLOR_OPTIONS_BY_KEY.italicColor,
+  COLOR_OPTIONS_BY_KEY.highlightBackground,
+].filter((option): option is ColorOption => option !== undefined);
 
 interface PaletteChoice {
   value: string;
@@ -138,7 +185,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     dark: new Map(),
   };
   private nextCustomDraftRevision = 0;
-  private legacyPalettePage = false;
+  private legacyPage: SettingsPageId | null = null;
 
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
     super(app, plugin);
@@ -198,7 +245,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     this.clearColorControls();
     this.clearPendingCustom();
     this.visibility++;
-    this.legacyPalettePage = false;
+    this.legacyPage = null;
     super.hide();
     this.containerEl.empty();
   }
@@ -254,24 +301,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     const editedMode = this.plugin.getEditedProfileMode();
     const otherMode = editedMode === "light" ? "dark" : "light";
 
-    const backgroundOptions = [
-      COLOR_OPTIONS_BY_KEY.backgroundPrimary,
-      COLOR_OPTIONS_BY_KEY.backgroundSecondary,
-      COLOR_OPTIONS_BY_KEY.backgroundPrimaryAlt,
-      COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
-      COLOR_OPTIONS_BY_KEY.interactiveBackground,
-      COLOR_OPTIONS_BY_KEY.formFieldBackground,
-    ].filter((option): option is ColorOption => option !== undefined);
-
-    const linkOptions = [
-      COLOR_OPTIONS_BY_KEY.linkColor,
-      COLOR_OPTIONS_BY_KEY.externalLinkColor,
-      COLOR_OPTIONS_BY_KEY.unresolvedLinkColor,
-      COLOR_OPTIONS_BY_KEY.boldColor,
-      COLOR_OPTIONS_BY_KEY.italicColor,
-      COLOR_OPTIONS_BY_KEY.highlightBackground,
-    ].filter((option): option is ColorOption => option !== undefined);
-
     return [
       // ── Profile controls ────────────────────────────────────────────
       {
@@ -303,72 +332,13 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         }),
       },
 
-      {
+      // ── Settings pages ──────────────────────────────────────────────
+      ...SETTINGS_PAGES.map((page): SettingDefinitionPage => ({
         type: "page",
-        name: "Color palette",
-        desc: "Edit the palette or import colors.",
-        items: this.palettePageDefinitions(editedMode, token),
-      },
-
-      // ── Import / Export ─────────────────────────────────────────────
-      this.sectionGroup("Import / Export", "Share your settings or generate a standalone CSS snippet.", [
-        {
-          name: "Export settings",
-          desc: "Download your current settings as a JSON file that can be imported later or shared with others.",
-          render: this.renderRow(token, (setting, rowToken) => {
-            this.configureExportJsonRow(setting, rowToken);
-          }),
-        },
-        {
-          name: "Import settings",
-          desc: "Load settings from a previously exported JSON file. This will overwrite your current settings.",
-          render: this.renderRow(token, (setting, rowToken) => {
-            this.configureImportJsonRow(setting, rowToken);
-          }),
-        },
-        {
-          name: "Export as CSS snippet",
-          desc:
-            `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
-            "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
-          render: this.renderRow(token, (setting, rowToken) => {
-            this.configureExportSnippetRow(setting, rowToken);
-          }),
-        },
-      ]),
-
-      // ── Style settings ──────────────────────────────────────────────
-      this.sectionGroup("Backgrounds", "App chrome, note surfaces, and editor background colors.",
-        backgroundOptions.map((option) => this.colorDef(editedMode, option, token))
-      ),
-
-      this.sectionGroup(
-        "Links and emphasis",
-        "Internal links, external links, bold, italic, and highlighted text. Link hover colors are computed automatically.",
-        linkOptions.map((option) => this.colorDef(editedMode, option, token))
-      ),
-
-      this.sectionGroup("Typography", "Base text size and line spacing for note content in both modes.", [
-        ...TYPOGRAPHY_COLOR_OPTIONS.map((option) => this.colorDef(editedMode, option, token)),
-        ...TYPOGRAPHY_OPTIONS.map((option) => this.sliderDef(editedMode, option, token)),
-      ]),
-
-      this.sectionGroup("Headings", "Per-level heading colors, sizes, weights, and line heights.",
-        HEADING_LEVELS.flatMap((level) => this.headingDefs(editedMode, level, token))
-      ),
-
-      this.sectionGroup("Advanced", "Additional default-theme note styling controls.", [
-        this.subheadingDef("Lists and rules", "Adjust list spacing, indentation, and horizontal rule styling."),
-        ...ADVANCED_LIST_OPTIONS.map((option) => this.sliderDef(editedMode, option, token)),
-        ...ADVANCED_LIST_COLOR_OPTIONS.map((option) => this.colorDef(editedMode, option, token)),
-        this.subheadingDef("Blockquotes", "Customize blockquote text, background, and border colors."),
-        ...ADVANCED_BLOCKQUOTE_OPTIONS.map((option) => this.colorDef(editedMode, option, token)),
-        this.subheadingDef("Code", "Control inline code and code block colors and font size."),
-        ...ADVANCED_CODE_COLOR_OPTIONS.map((option) => this.colorDef(editedMode, option, token)),
-        ...ADVANCED_CODE_SLIDER_OPTIONS.map((option) => this.sliderDef(editedMode, option, token)),
-        this.subheadingDef("Tags", "Style tags in Reading mode and Live Preview."),
-        ...ADVANCED_TAG_OPTIONS.map((option) => this.colorDef(editedMode, option, token)),
-      ]),
+        name: page.name,
+        desc: page.desc,
+        items: this.pageDefinitions(page, editedMode, token),
+      })),
     ];
   }
 
@@ -386,8 +356,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("theme-basics-settings");
 
-    if (this.legacyPalettePage) {
-      this.displayLegacyPalettePage(containerEl, editedMode, token);
+    if (this.legacyPage !== null) {
+      this.displayLegacyPage(containerEl, this.legacyPage, editedMode, token);
       return;
     }
 
@@ -420,154 +390,92 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       (setting) => this.configureResetAllRow(setting, token)
     );
 
-    this.addRow(containerEl, "Color palette", "Edit the palette or import colors.", (setting) => {
-      setting.addButton((button) => button.setButtonText("Open").setIcon("lucide-chevron-right").onClick(() => {
-        this.navigateLegacyPalettePage(true, token);
-      }));
-    });
-
-    // ── Import / Export ──────────────────────────────────────────────────
-    const ioSection = this.createSection(
-      containerEl,
-      "Import / Export",
-      "Share your settings or generate a standalone CSS snippet."
-    );
-
-    this.addRow(
-      ioSection,
-      "Export settings",
-      "Download your current settings as a JSON file that can be imported later or shared with others.",
-      (setting) => this.configureExportJsonRow(setting, token)
-    );
-
-    this.addRow(
-      ioSection,
-      "Import settings",
-      "Load settings from a previously exported JSON file. This will overwrite your current settings.",
-      (setting) => this.configureImportJsonRow(setting, token)
-    );
-
-    this.addRow(
-      ioSection,
-      "Export as CSS snippet",
-      `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
-      "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
-      (setting) => this.configureExportSnippetRow(setting, token)
-    );
-
-    // ── Style settings ────────────────────────────────────────────────
-    const backgroundsSection = this.createSection(
-      containerEl,
-      "Backgrounds",
-      "App chrome, note surfaces, and editor background colors."
-    );
-    for (const option of [
-      COLOR_OPTIONS_BY_KEY.backgroundPrimary,
-      COLOR_OPTIONS_BY_KEY.backgroundSecondary,
-      COLOR_OPTIONS_BY_KEY.backgroundPrimaryAlt,
-      COLOR_OPTIONS_BY_KEY.backgroundSecondaryAlt,
-      COLOR_OPTIONS_BY_KEY.interactiveBackground,
-      COLOR_OPTIONS_BY_KEY.formFieldBackground,
-    ]) {
-      if (option) {
-        this.addColorSetting(backgroundsSection, editedMode, option, token);
-      }
-    }
-
-    const linksSection = this.createSection(
-      containerEl,
-      "Links and emphasis",
-      "Internal links, external links, bold, italic, and highlighted text. Link hover colors are computed automatically."
-    );
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.linkColor, token);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.externalLinkColor, token);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.unresolvedLinkColor, token);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.boldColor, token);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.italicColor, token);
-    this.addOptionalColorSetting(linksSection, editedMode, COLOR_OPTIONS_BY_KEY.highlightBackground, token);
-
-    const typographySection = this.createSection(
-      containerEl,
-      "Typography",
-      "Base text size and line spacing for note content in both modes."
-    );
-    for (const option of TYPOGRAPHY_COLOR_OPTIONS) {
-      this.addColorSetting(typographySection, editedMode, option, token);
-    }
-    for (const option of TYPOGRAPHY_OPTIONS) {
-      this.addSliderSetting(typographySection, editedMode, option, token);
-    }
-
-    const headingsSection = this.createSection(
-      containerEl,
-      "Headings",
-      "Per-level heading colors, sizes, weights, and line heights."
-    );
-    for (const level of HEADING_LEVELS) {
-      this.addHeadingSetting(headingsSection, editedMode, level, token);
-    }
-
-    const advancedSection = this.createSection(
-      containerEl,
-      "Advanced",
-      "Additional default-theme note styling controls."
-    );
-
-    this.addSubheading(
-      advancedSection,
-      "Lists and rules",
-      "Adjust list spacing, indentation, and horizontal rule styling."
-    );
-    for (const option of ADVANCED_LIST_OPTIONS) {
-      this.addSliderSetting(advancedSection, editedMode, option, token);
-    }
-    for (const option of ADVANCED_LIST_COLOR_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option, token);
-    }
-
-    this.addSubheading(
-      advancedSection,
-      "Blockquotes",
-      "Customize blockquote text, background, and border colors."
-    );
-    for (const option of ADVANCED_BLOCKQUOTE_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option, token);
-    }
-
-    this.addSubheading(
-      advancedSection,
-      "Code",
-      "Control inline code and code block colors and font size."
-    );
-    for (const option of ADVANCED_CODE_COLOR_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option, token);
-    }
-    for (const option of ADVANCED_CODE_SLIDER_OPTIONS) {
-      this.addSliderSetting(advancedSection, editedMode, option, token);
-    }
-
-    this.addSubheading(advancedSection, "Tags", "Style tags in Reading mode and Live Preview.");
-    for (const option of ADVANCED_TAG_OPTIONS) {
-      this.addColorSetting(advancedSection, editedMode, option, token);
+    // ── Settings pages ────────────────────────────────────────────────
+    for (const page of SETTINGS_PAGES) {
+      this.addRow(containerEl, page.name, page.desc, (setting) => {
+        setting.addButton((button) => button.setButtonText("Open").setIcon("lucide-chevron-right").onClick(() => {
+          this.navigateLegacyPage(page.id, token);
+        }));
+      });
     }
   }
 
-  private navigateLegacyPalettePage(open: boolean, token: DisplayToken): void {
+  private navigateLegacyPage(page: SettingsPageId | null, token: DisplayToken): void {
     if (this.isStale(token)) return;
-    this.legacyPalettePage = open;
+    this.legacyPage = page;
     this.rerender();
     this.containerEl.scrollTop = 0;
   }
 
-  private displayLegacyPalettePage(containerEl: HTMLElement, mode: ProfileMode, token: DisplayToken): void {
+  private displayLegacyPage(containerEl: HTMLElement, id: SettingsPageId, mode: ProfileMode, token: DisplayToken): void {
+    const page = SETTINGS_PAGES.find((candidate) => candidate.id === id);
+    if (!page) throw new Error(`Unknown settings page: ${id}`);
     this.addRow(containerEl, "Back to settings", "Return to the main Theme Basics settings.", (setting) => {
       setting.addButton((button) => button.setButtonText("Back").setIcon("lucide-arrow-left").onClick(() => {
-        this.navigateLegacyPalettePage(false, token);
+        this.navigateLegacyPage(null, token);
       }));
     });
-    new Setting(containerEl).setName("Color palette").setHeading();
-    this.addRow(containerEl, "Profile to edit", "Choose whether you are editing the light or dark profile.",
-      (setting) => this.configureProfileRow(setting, mode, token));
+    new Setting(containerEl).setName(page.name).setHeading();
+    if (page.profileRow) {
+      this.addRow(containerEl, "Profile to edit", "Choose whether you are editing the light or dark profile.",
+        (setting) => this.configureProfileRow(setting, mode, token));
+    }
+    // Mirrors the declarative pages: the palette, headings, and advanced pages have no page-level intro.
+    if (id !== "palette" && id !== "headings" && id !== "advanced") {
+      new Setting(containerEl).setDesc(page.desc).setHeading();
+    }
+    this.displayLegacyPageContent(containerEl, id, mode, token);
+  }
+
+  private displayLegacyPageContent(containerEl: HTMLElement, id: SettingsPageId, mode: ProfileMode, token: DisplayToken): void {
+    switch (id) {
+      case "palette":
+        this.displayLegacyPaletteContent(containerEl, mode, token);
+        return;
+      case "backgrounds":
+        for (const option of BACKGROUND_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
+        return;
+      case "links":
+        for (const option of LINK_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
+        return;
+      case "typography":
+        for (const option of TYPOGRAPHY_COLOR_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
+        for (const option of TYPOGRAPHY_OPTIONS) this.addSliderSetting(containerEl, mode, option, token);
+        return;
+      case "headings":
+        for (const level of HEADING_LEVELS) this.addHeadingSetting(containerEl, mode, level, token);
+        return;
+      case "advanced": {
+        const lists = this.createSection(containerEl, "Lists and rules",
+          "Adjust list spacing, indentation, and horizontal rule styling.");
+        for (const option of ADVANCED_LIST_OPTIONS) this.addSliderSetting(lists, mode, option, token);
+        for (const option of ADVANCED_LIST_COLOR_OPTIONS) this.addColorSetting(lists, mode, option, token);
+        const blockquotes = this.createSection(containerEl, "Blockquotes",
+          "Customize blockquote text, background, and border colors.");
+        for (const option of ADVANCED_BLOCKQUOTE_OPTIONS) this.addColorSetting(blockquotes, mode, option, token);
+        const code = this.createSection(containerEl, "Code", "Control inline code and code block colors and font size.");
+        for (const option of ADVANCED_CODE_COLOR_OPTIONS) this.addColorSetting(code, mode, option, token);
+        for (const option of ADVANCED_CODE_SLIDER_OPTIONS) this.addSliderSetting(code, mode, option, token);
+        const tags = this.createSection(containerEl, "Tags", "Style tags in Reading mode and Live Preview.");
+        for (const option of ADVANCED_TAG_OPTIONS) this.addColorSetting(tags, mode, option, token);
+        return;
+      }
+      case "importExport":
+        this.addRow(containerEl, "Export settings",
+          "Download your current settings as a JSON file that can be imported later or shared with others.",
+          (setting) => this.configureExportJsonRow(setting, token));
+        this.addRow(containerEl, "Import settings",
+          "Load settings from a previously exported JSON file. This will overwrite your current settings.",
+          (setting) => this.configureImportJsonRow(setting, token));
+        this.addRow(containerEl, "Export as CSS snippet",
+          `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
+          "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
+          (setting) => this.configureExportSnippetRow(setting, token));
+        return;
+    }
+  }
+
+  private displayLegacyPaletteContent(containerEl: HTMLElement, mode: ProfileMode, token: DisplayToken): void {
     const paletteSection = this.createSection(containerEl, "Colors", this.paletteDescription(mode));
     for (let index = 0; index < this.plugin.settings.palettes[mode].length; index++) {
       this.addRow(paletteSection, `Color ${index + 1}`, this.paletteSlotDescription(mode, index),
@@ -576,7 +484,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     this.addRow(containerEl, "Add palette color", "Add another editable color slot.",
       (setting) => this.configureAddPaletteRow(setting, mode, token));
     const listSection = this.createSection(containerEl, "Import color list", this.paletteListDescription(mode));
-    this.addRow(listSection, "Color list format", "Choose CSV or a JSON array of color strings.",
+    this.addRow(listSection, "Color list format", PALETTE_LIST_FORMAT_DESC,
       (setting) => this.configurePaletteListFormat(setting, token));
     this.addRow(listSection, "Color list", "Paste colors or load a CSV or JSON file.",
       (setting) => this.configurePaletteListInput(setting, token));
@@ -681,27 +589,97 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
   }
 
-  /** A heading-styled row used for subheadings inside a section. */
-  private subheadingDef(name: string, description?: string): SettingGroupItem {
+  /** The "Profile to edit" row that leads each profile-dependent page. */
+  private profileDef(mode: ProfileMode, token: DisplayToken): SettingGroupItem {
     return {
-      name,
-      ...(description === undefined ? {} : { desc: description }),
-      searchable: false,
-      render: (setting) => {
-        setting.setHeading();
-      },
+      name: "Profile to edit",
+      desc: "Choose whether you are editing the light or dark profile.",
+      render: this.renderRow(token, (setting, rowToken) => {
+        this.configureProfileRow(setting, mode, rowToken);
+      }),
+    };
+  }
+
+  /** Items for one declarative page; profile-dependent pages lead with the profile row. */
+  private pageDefinitions(page: SettingsPage, mode: ProfileMode, token: DisplayToken): SettingDefinitionItem[] {
+    return [
+      ...(page.profileRow ? [this.profileDef(mode, token)] : []),
+      ...this.pageContentDefinitions(page, mode, token),
+    ];
+  }
+
+  private pageContentDefinitions(page: SettingsPage, mode: ProfileMode, token: DisplayToken): SettingDefinitionItem[] {
+    switch (page.id) {
+      case "palette":
+        return this.palettePageDefinitions(mode, token);
+      case "backgrounds":
+        return [this.pageGroup(page.desc, BACKGROUND_OPTIONS.map((option) => this.colorDef(mode, option, token)))];
+      case "links":
+        return [this.pageGroup(page.desc, LINK_OPTIONS.map((option) => this.colorDef(mode, option, token)))];
+      case "typography":
+        return [this.pageGroup(page.desc, [
+          ...TYPOGRAPHY_COLOR_OPTIONS.map((option) => this.colorDef(mode, option, token)),
+          ...TYPOGRAPHY_OPTIONS.map((option) => this.sliderDef(mode, option, token)),
+        ])];
+      case "headings":
+        return HEADING_LEVELS.map((level) => this.headingGroupDef(mode, level, token));
+      case "advanced":
+        return [
+          this.sectionGroup("Lists and rules", "Adjust list spacing, indentation, and horizontal rule styling.", [
+            ...ADVANCED_LIST_OPTIONS.map((option) => this.sliderDef(mode, option, token)),
+            ...ADVANCED_LIST_COLOR_OPTIONS.map((option) => this.colorDef(mode, option, token)),
+          ]),
+          this.sectionGroup("Blockquotes", "Customize blockquote text, background, and border colors.",
+            ADVANCED_BLOCKQUOTE_OPTIONS.map((option) => this.colorDef(mode, option, token))
+          ),
+          this.sectionGroup("Code", "Control inline code and code block colors and font size.", [
+            ...ADVANCED_CODE_COLOR_OPTIONS.map((option) => this.colorDef(mode, option, token)),
+            ...ADVANCED_CODE_SLIDER_OPTIONS.map((option) => this.sliderDef(mode, option, token)),
+          ]),
+          this.sectionGroup("Tags", "Style tags in Reading mode and Live Preview.",
+            ADVANCED_TAG_OPTIONS.map((option) => this.colorDef(mode, option, token))
+          ),
+        ];
+      case "importExport":
+        return [this.pageGroup(page.desc, [
+          {
+            name: "Export settings",
+            desc: "Download your current settings as a JSON file that can be imported later or shared with others.",
+            render: this.renderRow(token, (setting, rowToken) => {
+              this.configureExportJsonRow(setting, rowToken);
+            }),
+          },
+          {
+            name: "Import settings",
+            desc: "Load settings from a previously exported JSON file. This will overwrite your current settings.",
+            render: this.renderRow(token, (setting, rowToken) => {
+              this.configureImportJsonRow(setting, rowToken);
+            }),
+          },
+          {
+            name: "Export as CSS snippet",
+            desc:
+              `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
+              "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
+            render: this.renderRow(token, (setting, rowToken) => {
+              this.configureExportSnippetRow(setting, rowToken);
+            }),
+          },
+        ])];
+    }
+  }
+
+  /** A heading-less group that opens a page with its section description. */
+  private pageGroup(description: string, items: SettingGroupItem[]): SettingDefinitionItem {
+    return {
+      type: "group",
+      cls: SECTION_CLASS,
+      items: [this.sectionIntro(description), ...items],
     };
   }
 
   private palettePageDefinitions(mode: ProfileMode, token: DisplayToken): SettingDefinitionItem[] {
     return [
-      {
-        name: "Profile to edit",
-        desc: "Choose whether you are editing the light or dark profile.",
-        render: this.renderRow(token, (setting, rowToken) => {
-          this.configureProfileRow(setting, mode, rowToken);
-        }),
-      },
       this.sectionGroup("Colors", this.paletteDescription(mode),
         this.plugin.settings.palettes[mode].map((_, index) => this.paletteDef(mode, index, token))
       ),
@@ -715,7 +693,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       this.sectionGroup("Import color list", this.paletteListDescription(mode), [
         {
           name: "Color list format",
-          desc: "Choose CSV or a JSON array of color strings.",
+          desc: PALETTE_LIST_FORMAT_DESC,
           render: this.renderRow(token, (setting, rowToken) => this.configurePaletteListFormat(setting, rowToken)),
         },
         {
@@ -809,7 +787,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private configurePaletteListInput(setting: Setting, token: DisplayToken): void {
     setting.addTextArea((textarea) => {
-      textarea.setPlaceholder("Paste a CSV color list or JSON array.").setValue(this.paletteList)
+      textarea.setPlaceholder(PALETTE_LIST_PLACEHOLDER).setValue(this.paletteList)
         .onChange((value) => {
           if (!this.isStale(token)) {
             this.paletteList = value;
@@ -956,13 +934,17 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
   }
 
-  private headingDefs(mode: ProfileMode, level: HeadingLevel, token: DisplayToken): SettingGroupItem[] {
+  /** Heading-per-level group for the declarative Headings page. */
+  private headingGroupDef(mode: ProfileMode, level: HeadingLevel, token: DisplayToken): SettingDefinitionItem {
     const { color, sliders } = this.headingOptions(level);
-    return [
-      this.subheadingDef(`H${level}`),
-      this.colorDef(mode, color, token),
-      ...sliders.map((option) => this.sliderDef(mode, option, token)),
-    ];
+    return {
+      type: "group",
+      heading: `H${level}`,
+      items: [
+        this.colorDef(mode, color, token),
+        ...sliders.map((option) => this.sliderDef(mode, option, token)),
+      ],
+    };
   }
 
   /** Option descriptors for one heading level, shared by both rendering paths. */
@@ -1427,21 +1409,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     const groupEl = containerEl.createDiv({ cls: ["setting-group", SECTION_CLASS] });
     new Setting(groupEl).setName(title).setDesc(description).setHeading();
     return groupEl.createDiv("setting-items");
-  }
-
-  private addSubheading(containerEl: HTMLElement, title: string, description: string): void {
-    new Setting(containerEl).setName(title).setDesc(description).setHeading();
-  }
-
-  private addOptionalColorSetting(
-    containerEl: HTMLElement,
-    mode: ProfileMode,
-    option: ColorOption | undefined,
-    token: DisplayToken
-  ): void {
-    if (option) {
-      this.addColorSetting(containerEl, mode, option, token);
-    }
   }
 
   private addColorSetting(

@@ -77,6 +77,7 @@ async function rendererChecks(bundle, styles) {
     host.activeTab = tab;
     const render = () => path === 'legacy' ? tab.display() : tab.update();
     const content = () => path === 'legacy' ? tab.containerEl : host.getCurrentPageEl();
+    // Synchronous lookup on the open page; blocks navigate first with goto().
     const row = (name) => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-name')?.textContent === name);
     const fire = async (el, type = 'change') => { el.dispatchEvent(new Event(type, { bubbles: true })); await tick(); };
     const click = async (el) => { el.click(); await tick(); };
@@ -122,48 +123,87 @@ async function rendererChecks(bundle, styles) {
           cleanup?.();
         }
       };
+      // Hiding leaves any open sub-page; the next lookup must start from the root.
+      const hideTab = () => {
+        tab.hide();
+        host.clearPageStack();
+        currentPage = null;
+      };
       const reopenTab = () => {
         teardown(tab.renderedItems);
         tab.renderedItems = [];
-        tab.hide();
+        hideTab();
         if (typeof tab.renderTab === 'function') tab.renderTab();
         else tab.display();
       };
+      // Settings sub-pages: each is opened from its root entry and left via its back control.
+      // `currentPage` tracks which page (root entry name) is open, or null on the root.
+      let currentPage = null;
+      const settle = async () => {
+        if (path === 'declarative') await new Promise((resolve) => activeWindow.setTimeout(resolve, 350));
+      };
+      const pageMarker = {
+        'Color palette': 'Color 1', Backgrounds: 'Primary background', 'Links and emphasis': 'Internal link color',
+        Typography: 'Base font size', Headings: 'H1', Advanced: 'Tag border color', 'Import / Export': 'Export settings',
+      };
+      const goto = async (name) => {
+        if (currentPage === name) return;
+        if (currentPage !== null) {
+          const backButton = path === 'legacy' ? row('Back to settings')?.querySelector('button') : content().querySelector('.setting-page-back-button');
+          if (!backButton) throw new Error('Settings page has no back button');
+          await click(backButton);
+          await settle();
+          // This minimal detached host lacks the full settings modal's container
+          // restoration; attach the real renderer's returned tab for CSS checks.
+          if (path === 'declarative' && !tab.containerEl.isConnected) hostEl.append(tab.containerEl);
+          if (!row(currentPage)) throw new Error(`Back did not restore the root from ${currentPage}`);
+          currentPage = null;
+        }
+        if (name === null) return;
+        const link = row(name);
+        if (!link) throw new Error(`Missing ${name} navigation row`);
+        await click(path === 'legacy' ? link.querySelector('button') : link);
+        await settle();
+        if (!row(pageMarker[name])) throw new Error(`${name} page did not open`);
+        currentPage = name;
+      };
+      const openPalette = () => goto('Color palette');
+      const closePalette = () => goto(null);
+      const pageNames = ['Color palette', 'Backgrounds', 'Links and emphasis', 'Typography', 'Headings', 'Advanced', 'Import / Export'];
+      // Root summary: entry rows for every page; no grouped sections live on the root.
+      const rootSummary = () => ({
+        pages: pageNames.filter((name) => Boolean(row(name))),
+        headedGroups: [...content().querySelectorAll('.setting-group')].filter((el) => el.querySelector('.setting-item-heading')).length,
+        sections: content().querySelectorAll('.theme-basics-section').length,
+      });
+      const h1Row = () => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-description')?.textContent.includes('Text color for H1 headings.'));
+
+      await goto('Backgrounds');
       const reopen = { beforeHide: await opensChoices(selectButton(row('Primary background'))) };
       const hiddenButton = selectButton(row('Primary background'));
       reopenTab();
+      await goto('Backgrounds');
       reopen.afterReopen = await opensChoices(selectButton(row('Primary background')));
       reopen.hiddenButton = await opensChoices(hiddenButton);
       reopenTab();
+      await goto('Backgrounds');
       reopen.afterSecondReopen = await opensChoices(selectButton(row('Primary background')));
       reopen.saves = saves;
       render();
+      await goto(null);
       const root = { hasPaletteLink: Boolean(row('Color palette')),
         pickers: content().querySelectorAll('input[type=color]').length,
-        base16: Boolean(row('Base16 YAML')), profile: Boolean(row('Profile to edit')) };
+        base16: Boolean(row('Base16 YAML')), profile: Boolean(row('Profile to edit')), ...rootSummary() };
       const rootRefreshers = tab.colorControlRefreshers.size;
+      await goto('Import / Export');
       const staleRootActions = ['Export settings', 'Import settings', 'Export as CSS snippet']
         .map((name) => row(name).querySelector('button'));
-      const h1Row = () => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-description')?.textContent.includes('Text color for H1 headings.'));
-      const openPalette = async () => {
-        const link = row('Color palette');
-        if (!link) throw new Error('Missing palette navigation row');
-        await click(path === 'legacy' ? link.querySelector('button') : link);
-        if (path === 'declarative') await new Promise((resolve) => activeWindow.setTimeout(resolve, 350));
-        if (!row('Color 1')) throw new Error('Palette page did not open');
-      };
-      const closePalette = async () => {
-        const backButton = path === 'legacy' ? row('Back to settings')?.querySelector('button') : content().querySelector('.setting-page-back-button');
-        if (!backButton) throw new Error('Palette page has no back button');
-        await click(backButton);
-        if (path === 'declarative') {
-          await new Promise((resolve) => activeWindow.setTimeout(resolve, 350));
-          // This minimal detached host lacks the full settings modal's container
-          // restoration; attach the real renderer's returned tab for CSS checks.
-          if (!tab.containerEl.isConnected) hostEl.append(tab.containerEl);
-        }
-        if (!row('Primary background')) throw new Error('Back did not restore main settings');
-      };
+      await goto('Headings');
+      const headings = { levels: [...content().querySelectorAll('.setting-item-heading .setting-item-name')]
+        .map((el) => el.textContent).filter((name) => /^H[1-6]$/.test(name)), h1Color: Boolean(h1Row()) };
+      await goto(null);
+      headings.backRoot = rootSummary();
+      await goto('Headings');
       let h1row = h1Row();
       let h1button = selectButton(h1row);
       const h2Row = () => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-description')?.textContent.includes('Text color for H2 headings.'));
@@ -238,8 +278,10 @@ async function rendererChecks(bundle, styles) {
       await fire(staleTextarea, 'input');
       const stalePage = { color: plugin.settings.palettes.light[0], mode: plugin.settings.uiProfile,
         yaml: tab.base16Yaml, refreshers: tab.colorControlRefreshers.size };
+      await goto('Headings');
       const afterSet = { shown: color2Shown, stored: plugin.settings.palettes.light[1],
         resolved: plugin.getResolvedProfile('light').h1Color, swatch: swatch(selectButton(h1Row())) };
+      await goto('Backgrounds');
       const bg = row('Primary background');
       const bgButton = selectButton(bg);
       const modal = await openChoices(bg);
@@ -254,7 +296,7 @@ async function rendererChecks(bundle, styles) {
       updateInput.value = '#345678';
       await fire(updateInput, 'input');
       await fire(updateInput, 'change');
-      await closePalette();
+      await goto('Backgrounds');
       const afterUpdate = { swatch: swatch(selectButton(row('Primary background'))), resolved: plugin.getResolvedProfile('light').backgroundPrimary };
       const currentModal = await openChoices(row('Primary background'));
       const current = choiceElements(currentModal).filter((el) => el.querySelector('.theme-basics-color-current'))
@@ -280,7 +322,7 @@ async function rendererChecks(bundle, styles) {
       const dark = { mode: plugin.settings.uiProfile, picker: row('Color 1').querySelector('input[type=color]').value,
         description: row('Color 1').querySelector('.setting-item-description').textContent,
         pageStillOpen: Boolean(row('Base16 YAML')) };
-      await closePalette();
+      await goto('Backgrounds');
       dark.assignment = selectButton(row('Primary background')).textContent;
       await openPalette();
       const back = row('Profile to edit').querySelector('select');
@@ -288,8 +330,9 @@ async function rendererChecks(bundle, styles) {
       await fire(back);
       const light = { picker: row('Color 1').querySelector('input[type=color]').value,
         pageStillOpen: Boolean(row('Base16 YAML')) };
-      await closePalette();
+      await goto('Backgrounds');
       light.assignment = selectButton(row('Primary background')).textContent;
+      await goto('Headings');
       light.heading = selectButton(h1Row()).textContent;
       await openPalette();
       const textarea = row('Base16 YAML').querySelector('textarea');
@@ -305,12 +348,13 @@ async function rendererChecks(bundle, styles) {
         darkPalette: plugin.settings.palettes.dark[0],
         textareaResize: getComputedStyle(row('Base16 YAML').querySelector('textarea')).resize,
         pageStillOpen: Boolean(row('Base16 YAML')) };
-      await closePalette();
+      await goto('Backgrounds');
       imported.assignment = selectButton(row('Primary background')).textContent;
       imported.resolved = plugin.getResolvedProfile('light').backgroundPrimary;
       imported.swatch = swatch(selectButton(row('Primary background')));
 
       // Exercise custom tag border independently from a shared palette slot.
+      await goto('Advanced');
       const tagRow = () => row('Tag border color');
       await choose(await openChoices(tagRow()), 'Color 1');
       await choose(await openChoices(tagRow()), 'Custom');
@@ -381,6 +425,7 @@ async function rendererChecks(bundle, styles) {
         picker: Boolean(tagRow().querySelector('input[type=color]')),
         label: selectButton(tagRow()).textContent };
 
+      await goto('Backgrounds');
       const importedModal = await openChoices(row('Primary background'));
       const importedChoices = choiceElements(importedModal).map((el) => ({ label: el.textContent.trim(), swatch: swatch(el) }));
       const modalAccessibility = { filterLabel: importedModal.inputEl.getAttribute('aria-label'),
@@ -388,7 +433,7 @@ async function rendererChecks(bundle, styles) {
         expanded: selectButton(row('Primary background')).getAttribute('aria-expanded') };
       const staleChoice = importedModal.getSuggestions('').find((choice) => choice.value === '12');
       const buttonBeforeHide = selectButton(row('Primary background'));
-      tab.hide();
+      hideTab();
       importedModal.onChooseSuggestion(staleChoice);
       await tick();
       const afterHide = { modalClosed: tab.activeColorModal === null,
@@ -417,8 +462,7 @@ async function rendererChecks(bundle, styles) {
       const afterRepeat = { refreshers: tab.colorControlRefreshers.size, rootRefreshers };
       await openPalette();
       const hiddenPicker = row('Color 1').querySelector('input[type=color]');
-      tab.hide();
-      host.clearPageStack();
+      hideTab();
       hiddenPicker.value = '#fedcba';
       await fire(hiddenPicker, 'input');
       await fire(hiddenPicker, 'change');
@@ -436,10 +480,10 @@ async function rendererChecks(bundle, styles) {
 
       // Unset Custom is UI state, retained across row rebuilds but never saved
       // as the native input's implicit preview color.
-      tab.hide();
-      host.clearPageStack();
+      hideTab();
       if (!tab.containerEl.isConnected) hostEl.append(tab.containerEl);
       render();
+      await goto('Advanced');
       const pendingTag = () => row('Tag border color');
       const pendingState = () => ({
         label: selectButton(pendingTag()).textContent,
@@ -470,7 +514,7 @@ async function rendererChecks(bundle, styles) {
       await switchProfile('light');
       pending.afterProfileSwitch = pendingState();
       await openPalette();
-      await closePalette();
+      await goto('Advanced');
       pending.afterPageNavigation = pendingState();
       await switchProfile('dark');
       pending.darkAfterSwitch = pendingState();
@@ -486,7 +530,7 @@ async function rendererChecks(bundle, styles) {
       await choose(await openChoices(pendingTag()), 'Custom');
       pending.fromUnsetSlot = pendingState();
       await openPalette();
-      await closePalette();
+      await goto('Advanced');
       pending.unsetSlotAfterPage = pendingState();
       const unsetPicker = pendingTag().querySelector('input[type=color]');
       unsetPicker.value = '#000000';
@@ -498,11 +542,15 @@ async function rendererChecks(bundle, styles) {
       await click(pendingTag().querySelector('.extra-setting-button'));
       await choose(await openChoices(pendingTag()), 'Custom');
       await switchProfile('light');
+      await goto(null);
       await click(row('Reset Light profile').querySelector('button'));
+      await goto('Advanced');
       pending.profileResetLight = pendingState();
       await switchProfile('dark');
       pending.profileResetOther = pendingState();
+      await goto(null);
       await click(row('Reset both profiles').querySelector('button'));
+      await goto('Advanced');
       pending.bothResetDark = pendingState();
       await switchProfile('light');
       pending.bothResetLight = pendingState();
@@ -533,19 +581,20 @@ async function rendererChecks(bundle, styles) {
       pendingTextarea.value = 'base00: "123456"';
       await fire(pendingTextarea, 'input');
       await click([...content().querySelectorAll('button')].find((el) => el.textContent === 'Apply to Light profile'));
-      await closePalette();
+      await goto('Advanced');
       pending.base16ImportLight = pendingState();
       await switchProfile('dark');
       pending.base16ImportOther = pendingState();
       await switchProfile('light');
       await choose(await openChoices(pendingTag()), 'Custom');
-      tab.hide();
-      host.clearPageStack();
+      hideTab();
       if (!tab.containerEl.isConnected) hostEl.append(tab.containerEl);
       render();
+      await goto('Advanced');
       pending.tabHide = pendingState();
 
       // Interactive background uses the same palette/custom control as other colors.
+      await goto('Backgrounds');
       const interactiveRow = () => row('Interactive background');
       const interactive = { description: interactiveRow().querySelector('.setting-item-description').textContent,
         initial: selectButton(interactiveRow()).textContent };
@@ -611,6 +660,7 @@ async function rendererChecks(bundle, styles) {
 
       // Exercise expanded slots, color text, list import, validation and reuse
       // through the actual controls without touching the installed plugin's data.
+      await goto(null);
       await plugin.resetAllSettings();
       tab.refreshDisplayPreserveScroll();
       await tick();
@@ -624,7 +674,7 @@ async function rendererChecks(bundle, styles) {
       expanded.beforeManualSet = plugin.settings.palettes.light[16];
       await click([...row('Color 17').querySelectorAll('button')].find((el) => el.textContent === 'Set'));
       expanded.manual = { value: plugin.settings.palettes.light[16], swatch: swatch(row('Color 17')) };
-      await closePalette();
+      await goto('Headings');
       await choose(await openChoices(h1Row()), 'Color 17');
       await choose(await openChoices(h2Row()), 'Color 1 (not set)');
       await openPalette();
@@ -658,7 +708,7 @@ async function rendererChecks(bundle, styles) {
       await importList('Append colors');
       plugin.saveData = save;
       expanded.failedSave = { unchanged: JSON.stringify(plugin.settings) === beforeInvalid, notice: notices[notices.length - 1] };
-      await closePalette();
+      await goto('Advanced');
       await choose(await openChoices(tagRow()), 'Color 17');
       await choose(await openChoices(tagRow()), 'Custom');
       const customText = () => tagRow().querySelector('.theme-basics-palette-text');
@@ -778,7 +828,7 @@ async function rendererChecks(bundle, styles) {
       plugin.saveData = originalSave;
       await click(thirdColor.querySelector('button'));
       races.failedPicker.retry = plugin.settings.palettes.light[2];
-      await closePalette();
+      await goto('Advanced');
 
       await choose(await openChoices(tagRow()), 'Custom');
       let customDraft = tagRow().querySelector('.theme-basics-palette-text');
@@ -927,7 +977,7 @@ async function rendererChecks(bundle, styles) {
         else delete activeDocument.createElement;
       }
 
-      results[path] = { reopen, root, page, stalePage, afterReset, afterAllReset, afterRepeat, afterPageHide, afterDispose, initial, legacy, legacyChoices, emptySlot,
+      results[path] = { reopen, root, headings, page, stalePage, afterReset, afterAllReset, afterRepeat, afterPageHide, afterDispose, initial, legacy, legacyChoices, emptySlot,
         afterSet, afterEdit, options, afterSelect, afterUpdate, current, keyboard, afterInherit, dark, light,
         imported, importedChoices, modalAccessibility, afterHide, custom, pending, interactive, formField, expanded, races };
     } finally { host.clearPageStack(); tab.dispose(); colorResolver.cleanup(); hostEl.remove(); stylesheet.remove(); }
@@ -949,7 +999,13 @@ for (const path of ['declarative', 'legacy']) {
   test(`${path}: palette opens as a separate page and returns cleanly`, options, () => {
     assert.deepEqual(results[path].reopen, { beforeHide: true, afterReopen: true, hiddenButton: false,
       afterSecondReopen: true, saves: 0 });
-    assert.deepEqual(results[path].root, { hasPaletteLink: true, pickers: 2, base16: false, profile: true });
+    // Colour rows now live on sub-pages; the root has only profile controls and page entries.
+    assert.deepEqual(results[path].root, { hasPaletteLink: true, pickers: 0, base16: false, profile: true,
+      pages: ['Color palette', 'Backgrounds', 'Links and emphasis', 'Typography', 'Headings', 'Advanced', 'Import / Export'],
+      headedGroups: 0, sections: 0 });
+    assert.deepEqual(results[path].headings, { levels: ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'], h1Color: true,
+      backRoot: { pages: ['Color palette', 'Backgrounds', 'Links and emphasis', 'Typography', 'Headings', 'Advanced', 'Import / Export'],
+        headedGroups: 0, sections: 0 } });
     assert.deepEqual(results[path].page, { profile: true, base16: true, rootSettingsVisible: false, refreshers: 0,
       nativePage: path === 'legacy' ? null : 1, modalClosed: true, staleRootAssignment: 1,
       // Legacy sections put the description in the heading row instead.
@@ -970,7 +1026,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].initial.pickers, 17);
     assert.equal(results[path].initial.unset, 16);
     assert.equal(results[path].initial.setButtons, 17);
-    assert.deepEqual(results[path].initial.palette, [...Array(16).fill(''), '#010203']);
+    assert.deepEqual(results[path].initial.palette, [...Array(16).fill(''), 'rgba(1, 2, 3, 0.3)']);
   });
   test(`${path}: legacy colors persist until selecting an unset slot, then Set activates it`, options, () => {
     assert.deepEqual(results[path].legacy, { label: 'Custom: rgba(1, 2, 3, 0.3)▾',
@@ -1009,7 +1065,7 @@ for (const path of ['declarative', 'legacy']) {
     for (let i = 3; i <= 16; i++) {
       assert.deepEqual(results[path].options[i + 1], { label: `Color ${i} (not set)`, swatch: { color: '', unset: true } });
     }
-    assert.deepEqual(results[path].options[18], { label: 'Color 17', swatch: { color: '#010203', unset: false } });
+    assert.deepEqual(results[path].options[18], { label: 'Color 17', swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false } });
     assert.deepEqual(results[path].afterSelect, { assignment: 0, resolved: '#123456', selected: 'Color 1▾',
       swatch: { color: '#123456', unset: false }, accessible: 'Main note and app background. Color 1', computed: 'rgb(18, 52, 86)' });
     assert.deepEqual(results[path].afterUpdate, { swatch: { color: '#345678', unset: false }, resolved: '#345678' });
