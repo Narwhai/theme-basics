@@ -36,6 +36,7 @@ export function createHarness(bundle) {
       return run;
     },
     Notice: class { constructor(message) { notices.push(message); } },
+    setIcon() {},
     TextComponent: class {
       constructor(container) {
         this.inputEl = { value: '', addClass() {}, setAttribute() {} };

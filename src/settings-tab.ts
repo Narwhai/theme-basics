@@ -10,6 +10,7 @@ import {
   SliderComponent,
   SuggestModal,
   TextComponent,
+  setIcon,
 } from "obsidian";
 
 import {
@@ -940,6 +941,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     return {
       type: "group",
       heading: `H${level}`,
+      cls: SECTION_CLASS,
       items: [
         this.colorDef(mode, color, token),
         ...sliders.map((option) => this.sliderDef(mode, option, token)),
@@ -1165,7 +1167,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       const assignment = this.plugin.settings.colorAssignments[mode][option.key];
       const isCustom = isPending() || (assignment === undefined && Boolean(existing));
       const choices: PaletteChoice[] = [{
-        value: "", label: "Inherit theme default", color: "",
+        value: "", label: "Inherit", color: "",
         selected: !isPending() && assignment === undefined && !existing,
       }, {
         value: "custom", label: "Custom", color: isCustom ? draft() : "", selected: isCustom,
@@ -1201,7 +1203,8 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         const label = selected.value === "custom" && selected.color
           ? `Custom: ${selected.color}` : selected.label;
         element.createSpan({ cls: "theme-basics-color-label", text: label });
-        const arrow = element.createSpan({ cls: "theme-basics-color-arrow", text: "▾" });
+        const arrow = element.createSpan({ cls: "theme-basics-color-arrow" });
+        setIcon(arrow, "lucide-chevron-down");
         arrow.setAttribute("aria-hidden", "true");
         element.setAttribute("aria-label", `${option.description} ${label}`);
         resetButton?.setDisabled(selected.value === "");

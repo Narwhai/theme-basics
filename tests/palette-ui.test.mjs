@@ -310,7 +310,7 @@ async function rendererChecks(bundle, styles) {
       const keyboard = { assignment: plugin.settings.colorAssignments.light.backgroundPrimary,
         open: Boolean(tab.activeColorModal), selected: selectButton(row('Primary background')).textContent };
       if (tab.activeColorModal) tab.activeColorModal.close();
-      await choose(await openChoices(row('Primary background')), 'Inherit theme default');
+      await choose(await openChoices(row('Primary background')), 'Inherit');
       const afterInherit = { assignment: plugin.settings.colorAssignments.light.backgroundPrimary ?? null,
         resolved: plugin.getResolvedProfile('light').backgroundPrimary, selected: selectButton(row('Primary background')).textContent,
         swatch: swatch(selectButton(row('Primary background'))) };
@@ -505,7 +505,7 @@ async function rendererChecks(bundle, styles) {
       pending.noPersistedState = !Object.hasOwn(plugin.settings, 'pendingCustom');
       await choose(await openChoices(pendingTag()), 'Color 8 (not set)');
       pending.slotSelection = pendingState();
-      await choose(await openChoices(pendingTag()), 'Inherit theme default');
+      await choose(await openChoices(pendingTag()), 'Inherit');
       pending.inheritSelection = pendingState();
       await choose(await openChoices(pendingTag()), 'Custom');
       await switchProfile('dark');
@@ -1029,7 +1029,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(results[path].initial.palette, [...Array(16).fill(''), 'rgba(1, 2, 3, 0.3)']);
   });
   test(`${path}: legacy colors persist until selecting an unset slot, then Set activates it`, options, () => {
-    assert.deepEqual(results[path].legacy, { label: 'Custom: rgba(1, 2, 3, 0.3)▾',
+    assert.deepEqual(results[path].legacy, { label: 'Custom: rgba(1, 2, 3, 0.3)',
       swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false }, resolved: 'rgba(1, 2, 3, 0.3)', computed: 'rgba(1, 2, 3, 0.3)',
       picker: '#010203', modern: 'oklch(60% 0.2 30)', modernPicker: '#de3e2d', initialSaves: 0,
       afterCustom: 'rgba(1, 2, 3, 0.3)', afterCustomSaves: 0, hasCommit: true,
@@ -1058,7 +1058,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].afterEdit.value, '#123456');
     assert.match(results[path].afterEdit.description, /All settings assigned/);
     assert.equal(results[path].options.length, 19);
-    assert.deepEqual(results[path].options[0], { label: 'Inherit theme default Current', swatch: { color: '', unset: true } });
+    assert.deepEqual(results[path].options[0], { label: 'Inherit Current', swatch: { color: '', unset: true } });
     assert.deepEqual(results[path].options[1], { label: 'Custom', swatch: { color: '', unset: true } });
     assert.deepEqual(results[path].options[2], { label: 'Color 1', swatch: { color: '#123456', unset: false } });
     assert.deepEqual(results[path].options[3], { label: 'Color 2', swatch: { color: results[path].afterSet.shown, unset: false } });
@@ -1066,12 +1066,12 @@ for (const path of ['declarative', 'legacy']) {
       assert.deepEqual(results[path].options[i + 1], { label: `Color ${i} (not set)`, swatch: { color: '', unset: true } });
     }
     assert.deepEqual(results[path].options[18], { label: 'Color 17', swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false } });
-    assert.deepEqual(results[path].afterSelect, { assignment: 0, resolved: '#123456', selected: 'Color 1▾',
+    assert.deepEqual(results[path].afterSelect, { assignment: 0, resolved: '#123456', selected: 'Color 1',
       swatch: { color: '#123456', unset: false }, accessible: 'Main note and app background. Color 1', computed: 'rgb(18, 52, 86)' });
     assert.deepEqual(results[path].afterUpdate, { swatch: { color: '#345678', unset: false }, resolved: '#345678' });
     assert.deepEqual(results[path].current, [{ label: 'Color 1 Current', swatch: { color: '#345678', unset: false } }]);
-    assert.deepEqual(results[path].keyboard, { assignment: 12, open: false, selected: 'Color 13 (not set)▾' });
-    assert.deepEqual(results[path].afterInherit, { assignment: null, resolved: '', selected: 'Inherit theme default▾',
+    assert.deepEqual(results[path].keyboard, { assignment: 12, open: false, selected: 'Color 13 (not set)' });
+    assert.deepEqual(results[path].afterInherit, { assignment: null, resolved: '', selected: 'Inherit',
       swatch: { color: '', unset: true } });
   });
   test(`${path}: custom colors seed from a slot and stay independent`, options, () => {
@@ -1098,41 +1098,41 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(custom.staleAfterSlot, { assignment: 0, literal: '' });
     assert.equal(custom.reseeded, '#abcdef');
     assert.equal(custom.staleAfterReselect, '#abcdef');
-    assert.deepEqual(custom.reset, { literal: '', assignment: null, picker: false, label: 'Inherit theme default▾' });
+    assert.deepEqual(custom.reset, { literal: '', assignment: null, picker: false, label: 'Inherit' });
   });
   test(`${path}: interactive background supports palette, custom, profile and reset`, options, () => {
     assert.match(results[path].interactive.description, /buttons and dropdowns throughout Obsidian/);
-    assert.equal(results[path].interactive.initial, 'Inherit theme default▾');
+    assert.equal(results[path].interactive.initial, 'Inherit');
     assert.deepEqual(results[path].interactive.lightPalette, { assignment: 9, color: '#aabbcc' });
     assert.equal(results[path].interactive.seed, '#aabbcc');
     assert.equal(results[path].interactive.lightCustom, '#445566');
-    assert.equal(results[path].interactive.darkInitial, 'Inherit theme default▾');
+    assert.equal(results[path].interactive.darkInitial, 'Inherit');
     assert.equal(results[path].interactive.darkCustom, '#778899');
     assert.equal(results[path].interactive.lightRestored, '#445566');
-    assert.deepEqual(results[path].interactive.reset, { label: 'Inherit theme default▾', light: '', dark: '#778899' });
+    assert.deepEqual(results[path].interactive.reset, { label: 'Inherit', light: '', dark: '#778899' });
   });
   test(`${path}: form field background supports palette, custom, profile and reset`, options, () => {
     assert.match(results[path].formField.description, /search and other text fields throughout Obsidian/);
-    assert.equal(results[path].formField.initial, 'Inherit theme default▾');
+    assert.equal(results[path].formField.initial, 'Inherit');
     assert.deepEqual(results[path].formField.lightPalette, { assignment: 9, color: '#aabbcc' });
     assert.equal(results[path].formField.seed, '#aabbcc');
     assert.equal(results[path].formField.lightCustom, '#112233');
-    assert.equal(results[path].formField.darkInitial, 'Inherit theme default▾');
+    assert.equal(results[path].formField.darkInitial, 'Inherit');
     assert.equal(results[path].formField.darkCustom, '#334455');
     assert.equal(results[path].formField.darkInteractive, '#778899');
     assert.equal(results[path].formField.lightRestored, '#112233');
-    assert.deepEqual(results[path].formField.reset, { label: 'Inherit theme default▾', light: '', dark: '#334455' });
+    assert.deepEqual(results[path].formField.reset, { label: 'Inherit', light: '', dark: '#334455' });
   });
   test(`${path}: pending Custom survives navigation without persisting a color`, options, () => {
     const pending = results[path].pending;
-    const unsetCustom = { label: 'Custom▾', picker: true, set: true, literal: '', assignment: null };
-    const inherit = { label: 'Inherit theme default▾', picker: false, set: false, literal: '', assignment: null };
-    const black = { label: 'Color 17▾', picker: false, set: false, literal: '', assignment: 16 };
-    const unsetSlotCustom = { label: 'Custom▾', picker: true, set: true, literal: '', assignment: 7 };
+    const unsetCustom = { label: 'Custom', picker: true, set: true, literal: '', assignment: null };
+    const inherit = { label: 'Inherit', picker: false, set: false, literal: '', assignment: null };
+    const black = { label: 'Color 17', picker: false, set: false, literal: '', assignment: 16 };
+    const unsetSlotCustom = { label: 'Custom', picker: true, set: true, literal: '', assignment: 7 };
     assert.deepEqual(pending.fromInherit, unsetCustom);
     assert.equal(pending.fromInheritWrites, 0);
     assert.equal(pending.noPersistedState, true);
-    assert.deepEqual(pending.slotSelection, { label: 'Color 8 (not set)▾', picker: false, set: false, literal: '', assignment: 7 });
+    assert.deepEqual(pending.slotSelection, { label: 'Color 8 (not set)', picker: false, set: false, literal: '', assignment: 7 });
     assert.deepEqual(pending.inheritSelection, inherit);
     assert.deepEqual(pending.otherProfileInitially, inherit);
     assert.deepEqual(pending.afterProfileSwitch, unsetCustom);
@@ -1232,13 +1232,13 @@ for (const path of ['declarative', 'legacy']) {
   test(`${path}: mode switching and Base16 refresh preserve assignment`, options, () => {
     assert.equal(results[path].dark.mode, 'dark');
     assert.match(results[path].dark.description, /Not set/);
-    assert.equal(results[path].dark.assignment, 'Inherit theme default▾');
+    assert.equal(results[path].dark.assignment, 'Inherit');
     assert.equal(results[path].dark.pageStillOpen, true);
     assert.deepEqual(results[path].light, { picker: '#345678', pageStillOpen: true,
-      assignment: 'Color 1▾', heading: 'Color 2▾' });
+      assignment: 'Color 1', heading: 'Color 2' });
     assert.deepEqual(results[path].imported, { palette: ['#abcdef', '#fedcba'], picker1: '#abcdef', picker13: '#fedcba',
       untouched: results[path].afterSet.shown, headingAssignment: 1, darkPalette: '', textareaResize: 'vertical', pageStillOpen: true,
-      assignment: 'Color 1▾', resolved: '#abcdef', swatch: { color: '#abcdef', unset: false } });
+      assignment: 'Color 1', resolved: '#abcdef', swatch: { color: '#abcdef', unset: false } });
     assert.deepEqual(results[path].importedChoices[2], { label: 'Color 1 Current', swatch: { color: '#abcdef', unset: false } });
     assert.deepEqual(results[path].importedChoices[14], { label: 'Color 13', swatch: { color: '#fedcba', unset: false } });
     assert.deepEqual(results[path].modalAccessibility, { filterLabel: 'Filter palette colors',

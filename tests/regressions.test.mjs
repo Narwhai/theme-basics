@@ -541,7 +541,7 @@ test("settings use neutral palette labels and preserve a legacy value until chan
   assert.equal(plugin.getProfile("light").h1Color, "");
   await extra.click();
   assert.equal(plugin.settings.colorAssignments.light.h1Color, undefined);
-  assert.match(element.attributes["aria-label"], /Inherit theme default/);
+  assert.match(element.attributes["aria-label"], /Inherit/);
 });
 
 test("pending custom choices are transient, profile-scoped, and cleared only by relevant replacements", async () => {
