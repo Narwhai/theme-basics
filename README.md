@@ -1,16 +1,21 @@
 # Theme Basics
 
-A plugin that allows you to customize basic appearance properties such as background colors, text sizes, line spacing, and more without the need to write custom CSS snippets. 
+Customize basic appearance properties such as background colors, text sizes, line spacing, and more without the need to write custom CSS snippets. 
 
-## Installation Instructions
+Release 1.2.0 features a large overhaul of the settings structure to better align with Obsidian's native settings, and also exposes the settings to the settings search feature, making it easier to find the appropriate setting.
 
-- Install the BRAT plugin from the Obsidian community plugins
-- In the BRAT plugin settings, click "Add beta plugin" in the "Beta plugin list" section
-- Paste the link to this repository in the Repository input field
-- Click "Add plugin"
-- Click "Community Plugins" in the left sidebar, find "Theme Basics" in the list and click "Enable"
+Available through the official Obsidian Community Plugins: https://community.obsidian.md/plugins/theme-basics
 
-## Available Settings
+![](assets/SettingsOverview.webp)
+
+## Features 
+
+- Customize a wide variety of Appearance settings through a UI, and see your changes in real time, without needing to write any custom CSS yourself. 
+- Configure separate light and dark profiles, each with their own settings.
+- Set up a color palette per profile, allowing you to easily assign colors to settings and keep your color scheme consistent.
+- Export your settings to a CSS snippet directly in your vault. This allows you to easily share or reuse your settings without needing to reconfigure them manually. Additionally, you could even delete this plugin altogether after exporting your settings, and still keep your customizations by using the exported CSS snippet.
+
+### Available Settings
 
 - Separate light and dark profiles
 - Backgrounds
@@ -61,10 +66,27 @@ A plugin that allows you to customize basic appearance properties such as backgr
 
 ## Notes
 
-- Intended to work mainly with the default theme, if you are using a community theme, settings may not work as intended.
+- Intended to work mainly with the default theme, if you are using a community theme, settings may not work as intended. However, it is technically possible, and the settings chosen here will try to override the theme's settings. This could be an option if you like the layout changes offered by a theme, but want to change details like the colors, font sizes, etc. 
 - If you have custom CSS snippets, they also might interfere with the settings found in this plugin if they target the same properties.
 
+## Screenshots
+
+![](assets/Color-Palette.webp)
+
+
+
+![](assets/Backgrounds.webp)
+![](assets/LinksAndEmphasis.webp)
+![](assets/Typography.webp)
+![](assets/Headings.webp)
+![](assets/Advanced.webp)
+![](assets/ImportExport.webp)
+ 
+
 ## Color palettes
+
+> [!NOTE] Disclaimer
+> Most of the following text is LLM generated, although I have reviewed it for correctness. These import settings might change to something more useful further down the line if I can find a better solution. The imports work correctly, but I'm thinking supporting [Iterm2 color schemes](https://iterm2colorschemes.com/) in addition to the current Base16 import would be more beneficial than a CSV/JSON list of colors.
 
 Open **Color palette** from the main Theme Basics settings. Light and dark
 profiles have separate palettes, each starting with 16 slots. Use **Add color**
