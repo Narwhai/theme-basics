@@ -137,7 +137,6 @@ test("comment punctuation survives palette assignment and CSS property/snippet g
   plugin.settings = structuredClone(harness.DEFAULT_SETTINGS);
   plugin.saveData = async () => {};
 
-  /* eslint-disable obsidianmd/prefer-active-doc -- Node-only CSS.supports test stub. */
   const previousCss = global.CSS;
   global.CSS = { supports: () => true };
   try {
@@ -153,7 +152,6 @@ test("comment punctuation survives palette assignment and CSS property/snippet g
     if (previousCss === undefined) delete global.CSS;
     else global.CSS = previousCss;
   }
-  /* eslint-enable obsidianmd/prefer-active-doc */
 });
 
 test("CSV and JSON imports preserve safe punctuation inside CSS comments", async () => {
@@ -162,7 +160,6 @@ test("CSV and JSON imports preserve safe punctuation inside CSS comments", async
   plugin.settings = structuredClone(harness.DEFAULT_SETTINGS);
   plugin.saveData = async () => {};
 
-  /* eslint-disable obsidianmd/prefer-active-doc -- Node-only CSS.supports test stub. */
   const previousCss = global.CSS;
   global.CSS = { supports: () => true };
   try {
@@ -180,7 +177,6 @@ test("CSV and JSON imports preserve safe punctuation inside CSS comments", async
     if (previousCss === undefined) delete global.CSS;
     else global.CSS = previousCss;
   }
-  /* eslint-enable obsidianmd/prefer-active-doc */
 });
 
 test("all palette input paths reject unsafe colors atomically", async () => {
@@ -191,7 +187,6 @@ test("all palette input paths reject unsafe colors atomically", async () => {
   const writes = [];
   plugin.saveData = async (settings) => { writes.push(structuredClone(settings)); };
 
-  /* eslint-disable obsidianmd/prefer-active-doc -- Node-only CSS.supports test stub. */
   const previousCss = global.CSS;
   global.CSS = { supports: () => true };
   try {
@@ -221,7 +216,6 @@ test("all palette input paths reject unsafe colors atomically", async () => {
     if (previousCss === undefined) delete global.CSS;
     else global.CSS = previousCss;
   }
-  /* eslint-enable obsidianmd/prefer-active-doc */
 });
 
 test("snippet export rejects unbalanced legacy values without changing settings or writing a file", async () => {

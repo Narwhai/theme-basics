@@ -11,18 +11,33 @@ if (!vault) throw new Error('Set OBSIDIAN_TEST_VAULT to an open vault with Theme
 async function rendererChecks(bundle, styles) {
   // Use real Obsidian Setting controls, but keep the fixture and writes isolated.
   const liveTab = app.plugins.plugins['theme-basics']?.settingsTab;
-  if (!liveTab || typeof liveTab.addRow !== 'function') throw new Error('Enable Theme Basics in the test vault before running this test.');
-  const probe = activeDocument.body.createDiv({ cls: 'theme-basics-offscreen' });
-  let Setting, ColorComponent, ButtonComponent, TextComponent;
-  try { liveTab.addRow(probe, 'probe', '', (setting) => {
-    Setting = setting.constructor;
-    setting.addColorPicker((picker) => { ColorComponent = picker.constructor; });
-    setting.addText((text) => { TextComponent = text.constructor; });
-    setting.addButton((button) => { ButtonComponent = button.constructor; });
-  }); }
-  finally { probe.remove(); }
-  if (!Setting || !ColorComponent || !ButtonComponent || !TextComponent) throw new Error('Could not obtain Obsidian UI constructors.');
+  if (!liveTab || typeof liveTab.getSettingDefinitions !== 'function') throw new Error('Enable Theme Basics in the test vault before running this test.');
   const RealPluginSettingTab = Object.getPrototypeOf(Object.getPrototypeOf(liveTab)).constructor;
+  let Setting, ColorComponent, ButtonComponent, TextComponent;
+  class ProbeTab extends RealPluginSettingTab {
+    getSettingDefinitions() {
+      return [{ name: 'probe', render: (setting) => {
+        Setting = setting.constructor;
+        setting.addColorPicker((picker) => { ColorComponent = picker.constructor; });
+        setting.addText((text) => { TextComponent = text.constructor; });
+        setting.addButton((button) => { ButtonComponent = button.constructor; });
+      } }];
+    }
+  }
+  // update() renders rows only into app.setting, so the probe needs the same detached host as the fixtures below.
+  const probeHostEl = activeDocument.body.createDiv({ cls: 'theme-basics-offscreen' });
+  const probeHost = Object.create(Object.getPrototypeOf(liveTab.app.setting));
+  Object.assign(probeHost, { containerEl: probeHostEl, pageStack: [], tabContentContainer: probeHostEl,
+    refreshSearch() {}, updatePageTitle() {} });
+  const probeApp = Object.create(liveTab.app);
+  Object.assign(probeApp, { setting: probeHost });
+  const probeTab = new ProbeTab(probeApp, liveTab.plugin);
+  probeTab.containerEl.isShown = () => true;
+  probeHost.activeTab = probeTab;
+  probeHostEl.append(probeTab.containerEl);
+  try { probeTab.update(); }
+  finally { probeHostEl.remove(); }
+  if (!Setting || !ColorComponent || !ButtonComponent || !TextComponent) throw new Error('Could not obtain Obsidian UI constructors.');
   const quickSwitcher = app.internalPlugins.plugins.switcher?.instance?.QuickSwitcherModal;
   if (!quickSwitcher) throw new Error('Enable the Quick Switcher core plugin to run palette modal checks.');
   const SuggestModal = Object.getPrototypeOf(Object.getPrototypeOf(quickSwitcher));
@@ -42,8 +57,8 @@ async function rendererChecks(bundle, styles) {
   const { Plugin, SettingsTab, StyleManager, DEFAULT_SETTINGS } = module.exports;
   const tick = () => new Promise((resolve) => activeWindow.setTimeout(resolve, 30));
   const results = {};
-  const supportsDeclarative = typeof RealPluginSettingTab.prototype.update === 'function';
-  for (const path of supportsDeclarative ? ['declarative', 'legacy'] : ['legacy']) {
+  if (typeof RealPluginSettingTab.prototype.update !== 'function') throw new Error('Obsidian has no declarative settings API.');
+  for (const path of ['declarative']) {
     const fixtureApp = Object.create(app);
     const host = Object.create(Object.getPrototypeOf(app.setting));
     const hostEl = activeDocument.body.createDiv({ cls: 'theme-basics-offscreen' });
@@ -71,12 +86,11 @@ async function rendererChecks(bundle, styles) {
     };
     const tab = new SettingsTab(plugin.app, plugin);
     plugin.settingsTab = tab;
-    if (path === 'legacy') tab.update = undefined;
     tab.containerEl.isShown = () => true;
     hostEl.append(tab.containerEl);
     host.activeTab = tab;
-    const render = () => path === 'legacy' ? tab.display() : tab.update();
-    const content = () => path === 'legacy' ? tab.containerEl : host.getCurrentPageEl();
+    const render = () => tab.update();
+    const content = () => host.getCurrentPageEl();
     // Synchronous lookup on the open page; blocks navigate first with goto().
     const row = (name) => [...content().querySelectorAll('.setting-item')].find((el) => el.querySelector('.setting-item-name')?.textContent === name);
     const fire = async (el, type = 'change') => { el.dispatchEvent(new Event(type, { bubbles: true })); await tick(); };
@@ -100,14 +114,13 @@ async function rendererChecks(bundle, styles) {
       if (!option) throw new Error(`Missing option ${label}`);
       await click(option);
     };
-    // eslint-disable-next-line obsidianmd/no-forbidden-elements -- isolated renderer fixture loads the checked-out CSS without reloading the installed plugin
     const stylesheet = activeDocument.head.createEl('style');
     stylesheet.textContent = styles;
     try {
       render();
       // Reopening a hidden tab: the settings modal tears rows down, calls
       // hide(), then renderTab() re-renders the cached definitions without a
-      // new getSettingDefinitions() call (or calls display() on legacy).
+      // new getSettingDefinitions() call.
       const opensChoices = async (button) => {
         await click(button);
         const opened = Boolean(tab.activeColorModal);
@@ -133,15 +146,13 @@ async function rendererChecks(bundle, styles) {
         teardown(tab.renderedItems);
         tab.renderedItems = [];
         hideTab();
-        if (typeof tab.renderTab === 'function') tab.renderTab();
-        else tab.display();
+        if (typeof tab.renderTab !== 'function') throw new Error('Obsidian has no renderTab() on the settings tab.');
+        tab.renderTab();
       };
       // Settings sub-pages: each is opened from its root entry and left via its back control.
       // `currentPage` tracks which page (root entry name) is open, or null on the root.
       let currentPage = null;
-      const settle = async () => {
-        if (path === 'declarative') await new Promise((resolve) => activeWindow.setTimeout(resolve, 350));
-      };
+      const settle = () => new Promise((resolve) => activeWindow.setTimeout(resolve, 350));
       const pageMarker = {
         'Color palette': 'Color 1', Backgrounds: 'Primary background', 'Links and emphasis': 'Internal link color',
         Typography: 'Base font size', Headings: 'H1', Advanced: 'Tag border color', 'Import / Export': 'Export settings',
@@ -149,20 +160,20 @@ async function rendererChecks(bundle, styles) {
       const goto = async (name) => {
         if (currentPage === name) return;
         if (currentPage !== null) {
-          const backButton = path === 'legacy' ? row('Back to settings')?.querySelector('button') : content().querySelector('.setting-page-back-button');
+          const backButton = content().querySelector('.setting-page-back-button');
           if (!backButton) throw new Error('Settings page has no back button');
           await click(backButton);
           await settle();
           // This minimal detached host lacks the full settings modal's container
           // restoration; attach the real renderer's returned tab for CSS checks.
-          if (path === 'declarative' && !tab.containerEl.isConnected) hostEl.append(tab.containerEl);
+          if (!tab.containerEl.isConnected) hostEl.append(tab.containerEl);
           if (!row(currentPage)) throw new Error(`Back did not restore the root from ${currentPage}`);
           currentPage = null;
         }
         if (name === null) return;
         const link = row(name);
         if (!link) throw new Error(`Missing ${name} navigation row`);
-        await click(path === 'legacy' ? link.querySelector('button') : link);
+        await click(link);
         await settle();
         if (!row(pageMarker[name])) throw new Error(`${name} page did not open`);
         currentPage = name;
@@ -239,7 +250,7 @@ async function rendererChecks(bundle, styles) {
       await tick();
       const page = { profile: Boolean(row('Profile to edit')), base16: Boolean(row('Base16 YAML')),
         rootSettingsVisible: Boolean(row('Primary background')), refreshers: tab.colorControlRefreshers.size,
-        nativePage: path === 'legacy' ? null : host.pageStack.length, modalClosed: tab.activeColorModal === null,
+        nativePage: host.pageStack.length, modalClosed: tab.activeColorModal === null,
         staleRootAssignment: plugin.settings.colorAssignments.light.h1Color,
         // Section descriptions need top spacing on the subpage too (it renders outside the tab container).
         sectionIntroPadding: [...content().querySelectorAll('.setting-items > .setting-item-heading:first-child')]
@@ -982,7 +993,7 @@ async function rendererChecks(bundle, styles) {
         imported, importedChoices, modalAccessibility, afterHide, custom, pending, interactive, formField, expanded, races };
     } finally { host.clearPageStack(); tab.dispose(); colorResolver.cleanup(); hostEl.remove(); stylesheet.remove(); }
   }
-  return { results, supportsDeclarative };
+  return { results };
 }
 const bundle = await bundlePlugin();
 const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
@@ -993,10 +1004,9 @@ const resultLine = lines.findLast((line) => line.startsWith('=> '));
 const diagnostics = lines.filter((line) => line !== resultLine);
 // Duplicate setting keys make Obsidian's re-render reuse the wrong rows.
 if (!resultLine || diagnostics.length) throw new Error(`Obsidian renderer checks failed: ${output}`);
-const { results, supportsDeclarative } = JSON.parse(resultLine.slice(3));
-for (const path of ['declarative', 'legacy']) {
-  const options = { skip: path === 'declarative' && !supportsDeclarative ? 'Obsidian has no declarative settings API' : false };
-  test(`${path}: palette opens as a separate page and returns cleanly`, options, () => {
+const { results } = JSON.parse(resultLine.slice(3));
+for (const path of ['declarative']) {
+  test(`${path}: palette opens as a separate page and returns cleanly`, () => {
     assert.deepEqual(results[path].reopen, { beforeHide: true, afterReopen: true, hiddenButton: false,
       afterSecondReopen: true, saves: 0 });
     // Colour rows now live on sub-pages; the root has only profile controls and page entries.
@@ -1007,9 +1017,8 @@ for (const path of ['declarative', 'legacy']) {
       backRoot: { pages: ['Color palette', 'Backgrounds', 'Links and emphasis', 'Typography', 'Headings', 'Advanced', 'Import / Export'],
         headedGroups: 0, sections: 0 } });
     assert.deepEqual(results[path].page, { profile: true, base16: true, rootSettingsVisible: false, refreshers: 0,
-      nativePage: path === 'legacy' ? null : 1, modalClosed: true, staleRootAssignment: 1,
-      // Legacy sections put the description in the heading row instead.
-      sectionIntroPadding: path === 'legacy' ? [] : ['24px', '24px', '24px'],
+      nativePage: 1, modalClosed: true, staleRootAssignment: 1,
+      sectionIntroPadding: ['24px', '24px', '24px'],
       staleRootModalOpened: false, staleRootActions: [] });
     assert.equal(results[path].stalePage.color, '#123456');
     assert.equal(results[path].stalePage.mode, 'light');
@@ -1021,14 +1030,14 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(results[path].afterPageHide, { color: '', rootRestored: true });
     assert.deepEqual(results[path].afterDispose, { color: '' });
   });
-  test(`${path}: palette slots use neutral labels, including a newly committed custom color`, options, () => {
+  test(`${path}: palette slots use neutral labels, including a newly committed custom color`, () => {
     assert.deepEqual(results[path].initial.labels, Array.from({ length: 17 }, (_, i) => `Color ${i + 1}`));
     assert.equal(results[path].initial.pickers, 17);
     assert.equal(results[path].initial.unset, 16);
     assert.equal(results[path].initial.setButtons, 17);
     assert.deepEqual(results[path].initial.palette, [...Array(16).fill(''), 'rgba(1, 2, 3, 0.3)']);
   });
-  test(`${path}: legacy colors persist until selecting an unset slot, then Set activates it`, options, () => {
+  test(`${path}: legacy colors persist until selecting an unset slot, then Set activates it`, () => {
     assert.deepEqual(results[path].legacy, { label: 'Custom: rgba(1, 2, 3, 0.3)',
       swatch: { color: 'rgba(1, 2, 3, 0.3)', unset: false }, resolved: 'rgba(1, 2, 3, 0.3)', computed: 'rgba(1, 2, 3, 0.3)',
       picker: '#010203', modern: 'oklch(60% 0.2 30)', modernPicker: '#de3e2d', initialSaves: 0,
@@ -1042,7 +1051,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].afterSet.resolved, results[path].afterSet.shown);
     assert.deepEqual(results[path].afterSet.swatch, { color: results[path].afterSet.shown, unset: false });
   });
-  test(`${path}: Set commits an unchanged translucent custom color as-is`, options, () => {
+  test(`${path}: Set commits an unchanged translucent custom color as-is`, () => {
     const legacy = results[path].legacy;
     assert.equal(legacy.resolved, 'rgba(1, 2, 3, 0.3)');
     assert.equal(legacy.afterCustom, 'rgba(1, 2, 3, 0.3)');
@@ -1054,7 +1063,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(legacy.afterApplyButton, false);
     assert.equal(legacy.modernAfterApply, 'oklch(60% 0.2 30)');
   });
-  test(`${path}: picker edit, swatches, assignment and inherit`, options, () => {
+  test(`${path}: picker edit, swatches, assignment and inherit`, () => {
     assert.equal(results[path].afterEdit.value, '#123456');
     assert.match(results[path].afterEdit.description, /All settings assigned/);
     assert.equal(results[path].options.length, 19);
@@ -1074,7 +1083,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(results[path].afterInherit, { assignment: null, resolved: '', selected: 'Inherit',
       swatch: { color: '', unset: true } });
   });
-  test(`${path}: custom colors seed from a slot and stay independent`, options, () => {
+  test(`${path}: custom colors seed from a slot and stay independent`, () => {
     const custom = results[path].custom;
     assert.equal(custom.seed, '#abcdef');
     assert.equal(custom.seededLiteral, '');
@@ -1100,7 +1109,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(custom.staleAfterReselect, '#abcdef');
     assert.deepEqual(custom.reset, { literal: '', assignment: null, picker: false, label: 'Inherit' });
   });
-  test(`${path}: interactive background supports palette, custom, profile and reset`, options, () => {
+  test(`${path}: interactive background supports palette, custom, profile and reset`, () => {
     assert.match(results[path].interactive.description, /buttons and dropdowns throughout Obsidian/);
     assert.equal(results[path].interactive.initial, 'Inherit');
     assert.deepEqual(results[path].interactive.lightPalette, { assignment: 9, color: '#aabbcc' });
@@ -1111,7 +1120,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].interactive.lightRestored, '#445566');
     assert.deepEqual(results[path].interactive.reset, { label: 'Inherit', light: '', dark: '#778899' });
   });
-  test(`${path}: form field background supports palette, custom, profile and reset`, options, () => {
+  test(`${path}: form field background supports palette, custom, profile and reset`, () => {
     assert.match(results[path].formField.description, /search and other text fields throughout Obsidian/);
     assert.equal(results[path].formField.initial, 'Inherit');
     assert.deepEqual(results[path].formField.lightPalette, { assignment: 9, color: '#aabbcc' });
@@ -1123,7 +1132,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].formField.lightRestored, '#112233');
     assert.deepEqual(results[path].formField.reset, { label: 'Inherit', light: '', dark: '#334455' });
   });
-  test(`${path}: pending Custom survives navigation without persisting a color`, options, () => {
+  test(`${path}: pending Custom survives navigation without persisting a color`, () => {
     const pending = results[path].pending;
     const unsetCustom = { label: 'Custom', picker: true, set: true, literal: '', assignment: null };
     const inherit = { label: 'Inherit', picker: false, set: false, literal: '', assignment: null };
@@ -1157,7 +1166,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(pending.base16ImportOther, unsetCustom);
     assert.deepEqual(pending.tabHide, inherit);
   });
-  test(`${path}: expanded palette UI adds, imports, validates and reuses CSS colors`, options, () => {
+  test(`${path}: expanded palette UI adds, imports, validates and reuses CSS colors`, () => {
     const expanded = results[path].expanded;
     assert.deepEqual(expanded.afterAdd, { count: 17, present: true });
     assert.equal(expanded.beforeManualSet, '');
@@ -1181,7 +1190,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(expanded.alphaCommit, { count: 20, assignment: 19,
       color: 'rgb(1 2 3 / 50.01%)', shared: 'rgba(1, 2, 3, 0.5)' });
   });
-  test(`${path}: failed profile switch and newer drafts remain consistent`, options, () => {
+  test(`${path}: failed profile switch and newer drafts remain consistent`, () => {
     const { failedProfile, palette, custom } = results[path].races;
     assert.equal(failedProfile.selected, 'light');
     assert.equal(failedProfile.committed, 'light');
@@ -1212,7 +1221,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.equal(results[path].races.resetDraft.draft, '#ddeeff');
     assert.match(results[path].races.resetDraft.label, /Custom: #ddeeff/);
   });
-  test(`${path}: palette CSV and JSON file inputs populate import controls`, options, () => {
+  test(`${path}: palette CSV and JSON file inputs populate import controls`, () => {
     const { files } = results[path].races;
     assert.deepEqual(files.csv, { format: 'csv', text: '#010203, rgba(1, 2, 3, 0.5)' });
     assert.deepEqual(files.append, ['#010203', 'rgba(1, 2, 3, 0.5)']);
@@ -1229,7 +1238,7 @@ for (const path of ['declarative', 'legacy']) {
     assert.deepEqual(results[path].races.settingsExport, { download: 'theme-basics-settings.json',
       attached: false, activeDocument: true, blob: true });
   });
-  test(`${path}: mode switching and Base16 refresh preserve assignment`, options, () => {
+  test(`${path}: mode switching and Base16 refresh preserve assignment`, () => {
     assert.equal(results[path].dark.mode, 'dark');
     assert.match(results[path].dark.description, /Not set/);
     assert.equal(results[path].dark.assignment, 'Inherit');

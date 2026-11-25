@@ -23,7 +23,7 @@ function paletteRow(picker, button) {
   const swatch = { setAttribute() {}, addClass() {}, removeClass() {}, setCssProps(props) { this.props = props; } };
   return {
     text, swatch,
-    controlEl: { createSpan() { return swatch; }, querySelector() { return { setAttribute() {} }; } },
+    controlEl: { createSpan() { return swatch; }, querySelector() { return { setAttribute() {} }; }, toggleClass() {} },
     setDesc(value) { this.desc = value; return this; },
     addText(configure) { configure(text); return this; },
     addColorPicker(configure) { configure(picker); return this; },
@@ -503,7 +503,7 @@ test("settings use neutral palette labels and preserve a legacy value until chan
     empty() { this.input = null; },
   };
   const row = {
-    controlEl: { createDiv() { return customContainer; } },
+    controlEl: { createDiv() { return customContainer; }, toggleClass() {} },
     addExtraButton(configure) { configure(extra); return this; },
     addButton(configure) { configure(button); return this; },
   };
@@ -788,7 +788,6 @@ test("expanded palettes append and replace by position with stable assignments a
 });
 
 test("color list import preserves CSS expressions and is atomic on invalid input or save failure", async () => {
-  /* eslint-disable obsidianmd/prefer-active-doc -- Node-only CSS.supports test stub, not app/window code. */
   const previousCss = global.CSS;
   global.CSS = { supports: (property, value) => property === "color" && /^(?:rgba|oklch|color-mix)\(/i.test(value) };
   try {
@@ -816,7 +815,6 @@ test("color list import preserves CSS expressions and is atomic on invalid input
     if (previousCss === undefined) delete global.CSS;
     else global.CSS = previousCss;
   }
-  /* eslint-enable obsidianmd/prefer-active-doc */
 });
 
 test("custom commit reuses equivalent hex, preserves alpha and adds only one slot", async () => {
@@ -946,7 +944,7 @@ test("a newer Custom draft survives an earlier asynchronous commit and row rebui
       createSpan(data) { return { ...data, addClass() {}, setAttribute() {}, setCssProps() {} }; } };
     const button = { buttonEl: element, onClick() { return this; } };
     const container = { input: null, querySelector() { return this.input; }, empty() { this.input = null; } };
-    return { container, row: { controlEl: { createDiv() { return container; } },
+    return { container, row: { controlEl: { createDiv() { return container; }, toggleClass() {} },
       addExtraButton(configure) { configure(extra); return this; },
       addButton(configure) { configure(button); return this; } } };
   };
@@ -968,7 +966,6 @@ test("a newer Custom draft survives an earlier asynchronous commit and row rebui
   assert.equal(next.container.textInput.value, "#445566");
 });
 
-/* eslint-disable obsidianmd/prefer-active-doc -- isolated Node file-input fixtures, not application DOM */
 test("an exported settings file over 1 MB can be restored through the file input", async () => {
   const source = fixture().plugin;
   source.settings.palettes.light = Array(110000).fill("#abcdef");
@@ -1331,7 +1328,6 @@ test("palette CSV and JSON file inputs populate and validate before importing", 
     else globalThis.createEl = previousCreateEl;
   }
 });
-/* eslint-enable obsidianmd/prefer-active-doc */
 
 function profileDropdown() {
   return {

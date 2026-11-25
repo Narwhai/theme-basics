@@ -156,7 +156,7 @@ interface DisplayToken {
 
 export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   /**
-   * The current display token. Replaced on display() or definition rebuilds.
+   * The current display token. Replaced on each getSettingDefinitions() call.
    * Handlers compare their captured token against this to detect staleness.
    */
   private displayToken: DisplayToken = { active: true };
@@ -186,12 +186,10 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     dark: new Map(),
   };
   private nextCustomDraftRevision = 0;
-  private legacyPage: SettingsPageId | null = null;
 
   constructor(app: App, private readonly plugin: DefaultThemeStyleTunerPlugin) {
     super(app, plugin);
-    // Declarative rendering (Obsidian 1.13+) never calls display(), so the
-    // container class cannot be applied from there.
+    // Applied here rather than in a display() override, which is never called on 1.13+.
     this.containerEl.addClass("theme-basics-settings");
   }
 
@@ -239,27 +237,23 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
   }
 
   override hide(): void {
-    // On 1.13+ the settings modal tears down declaratively rendered rows; on
-    // older versions hide() does nothing, so empty the container ourselves.
+    // The settings modal tears down declaratively rendered rows via super.hide().
     // Do not replace the root token: Obsidian re-renders the cached
     // definitions on reopen without calling getSettingDefinitions() again.
     this.clearColorControls();
     this.clearPendingCustom();
     this.visibility++;
-    this.legacyPage = null;
     super.hide();
-    this.containerEl.empty();
   }
 
   refreshDisplayPreserveScroll(): void {
     if (!this.containerEl.isShown()) {
       // Hidden declarative tabs still need fresh definitions for reopening/search.
-      // eslint-disable-next-line obsidianmd/no-unsupported-api -- runtime-guarded for pre-1.13 support
-      if (typeof this.update === "function") this.update();
+      this.update();
       return;
     }
     const containers = [this.containerEl, this.containerEl.parentElement].filter(
-      (element): element is HTMLElement => element instanceof HTMLElement
+      (element): element is HTMLElement => element !== null && element.instanceOf(HTMLElement)
     );
     const scrollPositions = containers.map((element) => ({
       element,
@@ -275,20 +269,17 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
 
     restoreScrollPosition();
-    requestAnimationFrame(() => {
+    activeWindow.requestAnimationFrame(() => {
       restoreScrollPosition();
-      requestAnimationFrame(() => {
+      activeWindow.requestAnimationFrame(() => {
         restoreScrollPosition();
       });
     });
   }
 
   /**
-   * Declarative settings for Obsidian 1.13+.  When this returns a non-empty
-   * array the framework renders the tab itself and skips {@link display}; on
-   * older versions display() runs instead.  Both paths share the same row
-   * configurators (e.g. {@link configureColorSetting}) so the two
-   * implementations cannot drift apart.
+   * Declarative settings for Obsidian 1.13+. Obsidian renders the tab from the
+   * returned array; rows share their configurators (e.g. {@link configureColorSetting}).
    *
    * Must stay cheap: it runs on every update() and once when the tab is
    * registered for search indexing.  Expensive work (theme-default DOM
@@ -343,162 +334,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     ];
   }
 
-  override display(): void {
-    // Mint a fresh token – any handler from a previous display() is now stale.
-    this.clearColorControls();
-    // display() rebuilds on every open, so its root also expires on hide().
-    const token: DisplayToken = { active: true, visibility: this.visibility };
-    this.displayToken = token;
-
-    const { containerEl } = this;
-    const editedMode = this.plugin.getEditedProfileMode();
-    const otherMode = editedMode === "light" ? "dark" : "light";
-
-    containerEl.empty();
-    containerEl.addClass("theme-basics-settings");
-
-    if (this.legacyPage !== null) {
-      this.displayLegacyPage(containerEl, this.legacyPage, editedMode, token);
-      return;
-    }
-
-    // ── Profile controls ──────────────────────────────────────────────
-    this.addRow(
-      containerEl,
-      "Profile to edit",
-      "Choose whether you are editing the light or dark profile.",
-      (setting) => this.configureProfileRow(setting, editedMode, token)
-    );
-
-    this.addRow(
-      containerEl,
-      "Copy edited profile",
-      `Copy all ${PROFILE_LABELS[editedMode]} values into the ${PROFILE_LABELS[otherMode]} profile.`,
-      (setting) => this.configureCopyProfileRow(setting, editedMode, token)
-    );
-
-    this.addRow(
-      containerEl,
-      `Reset ${PROFILE_LABELS[editedMode]} profile`,
-      `Clear every override in the ${PROFILE_LABELS[editedMode]} profile.`,
-      (setting) => this.configureResetProfileRow(setting, editedMode, token)
-    );
-
-    this.addRow(
-      containerEl,
-      "Reset both profiles",
-      "Clear every override in both light and dark profiles.",
-      (setting) => this.configureResetAllRow(setting, token)
-    );
-
-    // ── Settings pages ────────────────────────────────────────────────
-    for (const page of SETTINGS_PAGES) {
-      this.addRow(containerEl, page.name, page.desc, (setting) => {
-        setting.addButton((button) => button.setButtonText("Open").setIcon("lucide-chevron-right").onClick(() => {
-          this.navigateLegacyPage(page.id, token);
-        }));
-      });
-    }
-  }
-
-  private navigateLegacyPage(page: SettingsPageId | null, token: DisplayToken): void {
-    if (this.isStale(token)) return;
-    this.legacyPage = page;
-    this.rerender();
-    this.containerEl.scrollTop = 0;
-  }
-
-  private displayLegacyPage(containerEl: HTMLElement, id: SettingsPageId, mode: ProfileMode, token: DisplayToken): void {
-    const page = SETTINGS_PAGES.find((candidate) => candidate.id === id);
-    if (!page) throw new Error(`Unknown settings page: ${id}`);
-    this.addRow(containerEl, "Back to settings", "Return to the main Theme Basics settings.", (setting) => {
-      setting.addButton((button) => button.setButtonText("Back").setIcon("lucide-arrow-left").onClick(() => {
-        this.navigateLegacyPage(null, token);
-      }));
-    });
-    new Setting(containerEl).setName(page.name).setHeading();
-    if (page.profileRow) {
-      this.addRow(containerEl, "Profile to edit", "Choose whether you are editing the light or dark profile.",
-        (setting) => this.configureProfileRow(setting, mode, token));
-    }
-    // Mirrors the declarative pages: the palette, headings, and advanced pages have no page-level intro.
-    if (id !== "palette" && id !== "headings" && id !== "advanced") {
-      new Setting(containerEl).setDesc(page.desc).setHeading();
-    }
-    this.displayLegacyPageContent(containerEl, id, mode, token);
-  }
-
-  private displayLegacyPageContent(containerEl: HTMLElement, id: SettingsPageId, mode: ProfileMode, token: DisplayToken): void {
-    switch (id) {
-      case "palette":
-        this.displayLegacyPaletteContent(containerEl, mode, token);
-        return;
-      case "backgrounds":
-        for (const option of BACKGROUND_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
-        return;
-      case "links":
-        for (const option of LINK_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
-        return;
-      case "typography":
-        for (const option of TYPOGRAPHY_COLOR_OPTIONS) this.addColorSetting(containerEl, mode, option, token);
-        for (const option of TYPOGRAPHY_OPTIONS) this.addSliderSetting(containerEl, mode, option, token);
-        return;
-      case "headings":
-        for (const level of HEADING_LEVELS) this.addHeadingSetting(containerEl, mode, level, token);
-        return;
-      case "advanced": {
-        const lists = this.createSection(containerEl, "Lists and rules",
-          "Adjust list spacing, indentation, and horizontal rule styling.");
-        for (const option of ADVANCED_LIST_OPTIONS) this.addSliderSetting(lists, mode, option, token);
-        for (const option of ADVANCED_LIST_COLOR_OPTIONS) this.addColorSetting(lists, mode, option, token);
-        const blockquotes = this.createSection(containerEl, "Blockquotes",
-          "Customize blockquote text, background, and border colors.");
-        for (const option of ADVANCED_BLOCKQUOTE_OPTIONS) this.addColorSetting(blockquotes, mode, option, token);
-        const code = this.createSection(containerEl, "Code", "Control inline code and code block colors and font size.");
-        for (const option of ADVANCED_CODE_COLOR_OPTIONS) this.addColorSetting(code, mode, option, token);
-        for (const option of ADVANCED_CODE_SLIDER_OPTIONS) this.addSliderSetting(code, mode, option, token);
-        const tags = this.createSection(containerEl, "Tags", "Style tags in Reading mode and Live Preview.");
-        for (const option of ADVANCED_TAG_OPTIONS) this.addColorSetting(tags, mode, option, token);
-        return;
-      }
-      case "importExport":
-        this.addRow(containerEl, "Export settings",
-          "Download your current settings as a JSON file that can be imported later or shared with others.",
-          (setting) => this.configureExportJsonRow(setting, token));
-        this.addRow(containerEl, "Import settings",
-          "Load settings from a previously exported JSON file. This will overwrite your current settings.",
-          (setting) => this.configureImportJsonRow(setting, token));
-        this.addRow(containerEl, "Export as CSS snippet",
-          `Save your current style overrides to ${this.app.vault.configDir}/snippets/theme-basics.css. ` +
-          "You can then enable it in Appearance → CSS snippets and use it without this plugin.",
-          (setting) => this.configureExportSnippetRow(setting, token));
-        return;
-    }
-  }
-
-  private displayLegacyPaletteContent(containerEl: HTMLElement, mode: ProfileMode, token: DisplayToken): void {
-    const paletteSection = this.createSection(containerEl, "Colors", this.paletteDescription(mode));
-    for (let index = 0; index < this.plugin.settings.palettes[mode].length; index++) {
-      this.addRow(paletteSection, `Color ${index + 1}`, this.paletteSlotDescription(mode, index),
-        (setting) => this.configurePaletteSetting(setting, mode, index, token));
-    }
-    this.addRow(containerEl, "Add palette color", "Add another editable color slot.",
-      (setting) => this.configureAddPaletteRow(setting, mode, token));
-    const listSection = this.createSection(containerEl, "Import color list", this.paletteListDescription(mode));
-    this.addRow(listSection, "Color list format", PALETTE_LIST_FORMAT_DESC,
-      (setting) => this.configurePaletteListFormat(setting, token));
-    this.addRow(listSection, "Color list", "Paste colors or load a CSV or JSON file.",
-      (setting) => this.configurePaletteListInput(setting, token));
-    this.addRow(listSection, "Import colors", this.paletteListDescription(mode),
-      (setting) => this.configurePaletteListActions(setting, mode, token));
-    const base16Section = this.createSection(containerEl, "Import Base16 theme", this.base16Description(mode));
-    this.addRow(base16Section, "Base16 YAML",
-      "Paste the full text of a Base16 .yaml file below. " +
-      "Lines containing base00–base0F hex values are detected automatically; all other lines are ignored.",
-      (setting) => this.configureBase16TextareaRow(setting, token));
-    this.configureBase16ApplyRow(new Setting(base16Section), mode, token);
-  }
-
   private clearColorControls(): void {
     this.activeColorModal?.close();
     this.activeColorModal = null;
@@ -541,20 +376,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
   }
 
-  /**
-   * Re-renders the tab using whichever rendering path the running Obsidian
-   * version supports: declarative update() on 1.13+, imperative display() on
-   * older versions.
-   */
+  /** Re-renders the declarative settings tab. */
   private rerender(): void {
-    // eslint-disable-next-line obsidianmd/no-unsupported-api -- runtime-guarded: this branch is only taken when update() exists (Obsidian 1.13+)
-    if (typeof this.update === "function") {
-      // eslint-disable-next-line obsidianmd/no-unsupported-api -- guarded by the typeof check above
-      this.update();
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-deprecated -- dual support: display() is the only rendering path on Obsidian < 1.13
-      this.display();
-    }
+    this.update();
   }
 
   // ── Definition builders (declarative path) ────────────────────────────
@@ -1051,8 +875,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private configureResetProfileRow(setting: Setting, editedMode: ProfileMode, token: DisplayToken): void {
     setting.addButton((button) =>
-      // eslint-disable-next-line @typescript-eslint/no-deprecated -- setDestructive() requires Obsidian 1.13; setWarning() is the only destructive styling on our minAppVersion 1.10
-      button.setWarning().setButtonText("Reset profile").onClick(async () => {
+      button.setDestructive().setButtonText("Reset profile").onClick(async () => {
         if (this.isStale(token)) return;
         await this.plugin.resetProfile(editedMode);
         new Notice(`${PROFILE_LABELS[editedMode]} profile reset.`);
@@ -1064,8 +887,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
 
   private configureResetAllRow(setting: Setting, token: DisplayToken): void {
     setting.addButton((button) =>
-      // eslint-disable-next-line @typescript-eslint/no-deprecated -- setDestructive() requires Obsidian 1.13; setWarning() is the only destructive styling on our minAppVersion 1.10
-      button.setWarning().setButtonText("Reset both").onClick(async () => {
+      button.setDestructive().setButtonText("Reset both").onClick(async () => {
         if (this.isStale(token)) return;
         await this.plugin.resetAllSettings();
         if (this.isStale(token)) return;
@@ -1253,6 +1075,7 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
       const existing = this.plugin.getProfile(mode)[option.key];
       const assignment = this.plugin.settings.colorAssignments[mode][option.key];
       const isCustom = isPending() || (assignment === undefined && Boolean(existing));
+      setting.controlEl.toggleClass("theme-basics-has-custom-color", isCustom);
       if (!isCustom) {
         customContainer.empty();
         picker = null;
@@ -1372,8 +1195,6 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
         sliderComponent = slider;
         slider
           .setLimits(option.min, option.max, option.step)
-          // eslint-disable-next-line @typescript-eslint/no-deprecated -- still required for slider tooltips on Obsidian < 1.13, where the value is not shown inline
-          .setDynamicTooltip()
           .setValue(
             this.plugin.styleManager.ensureWithinRange(
               fallbackValue,
@@ -1393,67 +1214,5 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
             resetButton?.setDisabled(false);
           });
       });
-  }
-
-  // ── Imperative helpers (pre-1.13 path) ────────────────────────────────
-
-  /** Creates a named Setting row and lets {@link configure} attach its controls. */
-  private addRow(
-    containerEl: HTMLElement,
-    name: string,
-    desc: string,
-    configure: (setting: Setting) => void
-  ): void {
-    const setting = new Setting(containerEl).setName(name).setDesc(desc);
-    configure(setting);
-  }
-
-  private createSection(containerEl: HTMLElement, title: string, description: string): HTMLElement {
-    const groupEl = containerEl.createDiv({ cls: ["setting-group", SECTION_CLASS] });
-    new Setting(groupEl).setName(title).setDesc(description).setHeading();
-    return groupEl.createDiv("setting-items");
-  }
-
-  private addColorSetting(
-    containerEl: HTMLElement,
-    mode: ProfileMode,
-    option: ColorOption,
-    token: DisplayToken
-  ): void {
-    this.addRow(
-      containerEl,
-      option.name,
-      `${option.description} Reset to inherit the theme default.`,
-      (setting) => this.configureColorSetting(setting, mode, option, token)
-    );
-  }
-
-  private addSliderSetting(
-    containerEl: HTMLElement,
-    mode: ProfileMode,
-    option: SliderOption,
-    token: DisplayToken
-  ): void {
-    this.addRow(
-      containerEl,
-      option.name,
-      `${option.description} Reset to inherit the theme default.`,
-      (setting) => this.configureSliderSetting(setting, mode, option, token)
-    );
-  }
-
-  private addHeadingSetting(
-    containerEl: HTMLElement,
-    mode: ProfileMode,
-    level: HeadingLevel,
-    token: DisplayToken
-  ): void {
-    const { color, sliders } = this.headingOptions(level);
-
-    new Setting(containerEl).setName(`H${level}`).setHeading();
-    this.addColorSetting(containerEl, mode, color, token);
-    for (const option of sliders) {
-      this.addSliderSetting(containerEl, mode, option, token);
-    }
   }
 }
