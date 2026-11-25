@@ -269,9 +269,9 @@ export class DefaultThemeStyleTunerSettingTab extends PluginSettingTab {
     };
 
     restoreScrollPosition();
-    activeWindow.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       restoreScrollPosition();
-      activeWindow.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
         restoreScrollPosition();
       });
     });
