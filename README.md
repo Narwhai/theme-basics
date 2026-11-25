@@ -85,8 +85,8 @@ Available through the official Obsidian Community Plugins: https://community.obs
 
 ## Color palettes
 
-> [!NOTE] Disclaimer
-> Most of the following text is LLM generated, although I have reviewed it for correctness. These import settings might change to something more useful further down the line if I can find a better solution. The imports work correctly, but I'm thinking supporting [Iterm2 color schemes](https://iterm2colorschemes.com/) in addition to the current Base16 import would be more beneficial than a CSV/JSON list of colors.
+> [!NOTE] 
+> Disclaimer: Most of the following text is LLM generated, although I have reviewed it for correctness. These import settings might change to something more useful further down the line if I can find a better solution. The imports work correctly, but I'm thinking supporting [Iterm2 color schemes](https://iterm2colorschemes.com/) in addition to the current Base16 import would be more beneficial than a CSV/JSON list of colors.
 
 Open **Color palette** from the main Theme Basics settings. Light and dark
 profiles have separate palettes, each starting with 16 slots. Use **Add color**
